@@ -2,9 +2,11 @@
 
 # occulta
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23634486.svg)](https://doi.org/10.5281/zenodo.23634486)
+
 occulta, Latin for hidden things, is a blind search of the photometry of the Transiting Exoplanet Survey Satellite (TESS), K2, and Kepler for transiting planets and eclipsing binaries that no published catalogue contains. It streams the light curves of every star in a chosen brightness range, searches each of them for individual dips and periodic signals, stitches dips from different sectors into candidates, and vets every candidate first as a planet and then, when the signal is stellar, as an eclipsing binary. The user chooses which of the two hunts to run: planets alone, eclipsing binaries alone, or both together.
 
-> **occulta is public** (pre-release 0.0.1). It is ready for use and for testing; results can still change between versions. Please report problems, wrong results and suggestions on the [issue tracker](https://github.com/jovian-explorer/occulta/issues/new/choose).
+> **occulta is public** (pre-release 0.0.1). It is ready for use and for testing; results can still change between versions. Please report problems, wrong results and suggestions on the [issue tracker](https://github.com/jovian-explorer/occulta/issues/new/choose). To cite occulta, use the DOI [10.5281/zenodo.23634486](https://doi.org/10.5281/zenodo.23634486) (all versions; see [CITATION.cff](CITATION.cff)).
 
 ## Why a blind search
 
@@ -81,7 +83,7 @@ The recovery tests require that the pipeline find, with no prior information, th
 
 ## Methods and citation
 
-METHODS.md describes every step of the search and of the vetting, with references in docs/refs.bib. If you use occulta, please cite it as described in [CITATION.cff](CITATION.cff): Aggarwal, K. 2026, occulta: a blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries.
+METHODS.md describes every step of the search and of the vetting, with references in docs/refs.bib. If you use occulta, please cite it as described in [CITATION.cff](CITATION.cff): Aggarwal, K. 2026, occulta: a blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries, Zenodo, doi:10.5281/zenodo.23634486.
 
 ## Licence
 

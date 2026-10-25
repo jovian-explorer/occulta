@@ -8,6 +8,15 @@ authors:
     email: keshavaggarwal2310@gmail.com
 version: 0.0.1
 license: MIT
+# Concept DOI on Zenodo: all versions, always resolves to the newest release
+doi: 10.5281/zenodo.23634486
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23634486
+    description: "Concept DOI (all versions; resolves to the newest release)"
+  - type: doi
+    value: 10.5281/zenodo.23634487
+    description: "Version DOI of release v0.0.1"
 date-released: 2026-10-25
 abstract: >-
   occulta is a Python package for a blind search of the photometry of TESS, K2 and Kepler
