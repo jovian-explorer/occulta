@@ -90,3 +90,19 @@ def test_lighttime_scan_finds_an_injected_outer_orbit(tmp_path):
     assert out.returncode == 0, out.stderr[-500:]
     best = float(out.stdout.splitlines()[1].split()[1])
     assert abs(best / Pout - 1) < 0.02, out.stdout
+
+
+def test_promote_counts_a_transit_seen_by_qlp_and_spoc_once(tmp_path):
+    """The same transit in the QLP and the SPOC light curve of one sector (within 0.5 d) is one dip, so a star whose only
+    two dips are such a pair is not a candidate, while a second transit a week later makes it one."""
+    from occulta import survey
+    con = survey.db(tmp_path / 'hunt.db')
+    con.execute('INSERT INTO star_sector(tic, sector, inv_snr) VALUES (7, 1, 3.0)')
+    for t0, snr in ((1003.20, 14.0), (1003.25, 12.0)):          # the same transit in two light curves
+        con.execute("INSERT INTO event VALUES (7, 1, 1, 1, ?, 3.0, 2500, ?, 20, 0.5, '')", (t0, snr))
+    con.commit()
+    assert survey.promote(con) == 0
+    con.execute("INSERT INTO event VALUES (7, 1, 1, 1, 1010.33, 3.0, 2500, 11.0, 20, 0.5, '')")
+    con.commit()
+    assert survey.promote(con) == 1
+    assert con.execute('SELECT n_events FROM candidate WHERE tic=7').fetchone()[0] == 2

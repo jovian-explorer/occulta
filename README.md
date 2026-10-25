@@ -18,7 +18,10 @@ occulta, Latin for hidden things, is a blind search of the photometry of the Tra
 
 ## Quick start
 
-1. Install occulta with pip (details in [How to Install and Run](#-how-to-install-and-run)).
+1. Install occulta with pip (Python 3.10 or newer; details in [How to Install and Run](#-how-to-install-and-run)):
+   ```
+   pip install "git+https://github.com/jovian-explorer/occulta.git"
+   ```
 2. Create a working directory and run one session of the search:
    ```
    occulta init
@@ -50,10 +53,18 @@ The catalogues used for vetting are VSX, GCVS, Gaia DR3 (including its non-singl
 
 ### Install with pip (Python 3.10+)
 
-From a copy of this repository, or from the source archive on the [Releases](https://github.com/jovian-explorer/occulta/releases) page:
+occulta is not on PyPI; pip installs it straight from GitHub:
 
 ```
-pip install .
+pip install "git+https://github.com/jovian-explorer/occulta.git"
+```
+
+To work on the code, or to run the tests, install it from a copy of the repository (or from the source archive on the [Releases](https://github.com/jovian-explorer/occulta/releases) page):
+
+```
+git clone https://github.com/jovian-explorer/occulta.git
+cd occulta
+pip install ".[test]"
 ```
 
 ### Command-line options

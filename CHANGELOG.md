@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `occulta planets vet TIC` now vets a star that the survey has not promoted; before, every dip was dropped for want of a candidate depth and the star was always rejected.
+- Centroid shifts of Kepler and K2 data are converted with the Kepler pixel (3.98 arcsec) instead of the TESS pixel (21 arcsec), which had overstated them by a factor of 5.3.
+- `occulta binaries lighttime` and `occulta binaries lighttime-scan` no longer stop with a NameError.
+- The README and METHODS.md install occulta from GitHub (it is not on PyPI); METHODS.md now describes the Gaia sources of the pixel model and the light-travel-time search as the code performs them, and cites the sources of the RUWE limit, the stellar density, the Lomb-Scargle periodogram, the light-travel time, the secondary phase, and the Roche lobe.
+- docs/MODEL_AUDIT.md lists every method and threshold with its source and its test; offline tests on synthetic light curves cover the planet vetting, the eclipsing-binary analysis, and the light-travel-time scan.
+
 ## 0.0.1 (2026-10-25)
 
 First public pre-release.

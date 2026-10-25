@@ -61,6 +61,7 @@ def main(argv=None):
     ax2.legend(loc='lower left', bbox_to_anchor=(0, -0.12), ncol=4, markerscale=15, frameon=False)
     ax2.set_title('Stars searched so far (equatorial, Mollweide)', fontsize=10)
     out = ROOT / 'findings' / 'progress' / 'progress_map.png'
+    out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=110); print(out, done_lc, total_q)
 
 

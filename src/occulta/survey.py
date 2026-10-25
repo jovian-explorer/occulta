@@ -455,7 +455,13 @@ def run(minutes, mode='both'):
         if dir_gb(ROOT) > CFG['disk_cap_gb']:
             log('disk cap reached, not downloading'); return
         con = db()
-        refresh_known(con)
+        try:
+            refresh_known(con)
+        except requests.exceptions.RequestException as e:
+            if not con.execute('SELECT 1 FROM known LIMIT 1').fetchone():
+                log('the lists of known planets and binaries could not be downloaded, so that no signal can be judged '
+                    'new; the archive may be busy, so try again later:', repr(e)[:200]); return
+            log('the lists of known objects could not be refreshed; the previous lists are used:', repr(e)[:200])
         vet_new(con, deadline - 600)      # finish any outstanding vetting first
         while time.time() < deadline - 120:
             nj = next_job(con)
@@ -488,7 +494,7 @@ def status(con=None):
     con = con or db()
     q = lambda sql, *a: con.execute(sql, a).fetchall()
     bands = q('SELECT COUNT(*), SUM(n) FROM tic_band')[0]
-    log(f'catalogue bands {bands[0]}, stars {bands[1]}')
+    log(f'catalogue bands {bands[0]}, stars {bands[1] or 0}')
     for s, st, n, fin in q('SELECT job, status, n_targets, finished FROM job ORDER BY started'):
         u = int(s.split(':')[-1])
         d = q('SELECT COUNT(*) FROM target WHERE sector=? AND status>0', u)[0][0]
