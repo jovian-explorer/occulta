@@ -19,6 +19,14 @@ RSUN, MSUN, REARTH = 6.957e8, 1.989e30, 6.371e6
 
 
 AUTHORS = {'QLP': 'qlp', 'SPOC': 'spoc', 'TESS-SPOC': 'spoc', 'Kepler': 'kepler', 'K2SFF': 'k2sff'}
+P_MIN = 0.5            # shortest period proposed from a pair of dips (d)
+MAX_PAIR_DIPS = 25     # only the strongest dips propose periods
+MAX_PANELS = 24       # individual transits drawn in transits.png
+VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
+
+
+class VetTimeout(Exception):
+    pass
 
 
 def fetch_all(sid, workdir):
@@ -193,57 +201,69 @@ def vet(con, tic, findings):
             segs_t = list(zip(np.r_[t[0], t[cut + 1]], np.r_[t[cut], t[-1]]))
             for e in lcsearch.single_events(tg, dt, yg, lcsearch.mad_std(yg)):
                 c = lcsearch.characterise(e, tg, dt, yg, yg * 0, yg * 0, yg * 0, segs_t)
-                if depth_ppm and 0.5 < c['depth_ppm'] / depth_ppm < 2.0 and c['snr'] >= 7:
+                # a star vetted by hand has no candidate depth yet: every dip enters, and the pairing below matches depths
+                if (not depth_ppm or 0.5 < c['depth_ppm'] / depth_ppm < 2.0) and c['snr'] >= 7:
                     events.append((s, c['t0'], c['depth_ppm'], c['snr'], c['dur_h'], c['flags']))
         dur_d = (dur_h or 4) / 24
         notes = []
 
         # ---- period: every pair of similar dips proposes P = gap/n; keep the periods that the most dips share
         tol = max(0.06, dur_d / 4)
-        trials = {}
+        start = time.monotonic()
+        def check_time():
+            if time.monotonic() - start > VET_LIMIT_S:
+                raise VetTimeout(f'period search stopped after {VET_LIMIT_S} s ({len(events)} dips); vet by hand')
+        ranked = []
         if kind == 'bls' and P0:
             sup = [e for e in events if abs((((e[1] - T0) / P0 + 0.5) % 1 - 0.5) * P0) < tol]
             if len(sup) < 2:   # individual dips below the single-event threshold: trust the BLS ephemeris
                 sup = [(None, T0, depth_ppm, snr0, dur_h, '')]
-            trials[round(P0, 4)] = (P0, sup)
+            ranked = [(P0, sup)]
         else:
-            ev = [e for e in events if e[5] in ('', 'edge')]
+            # the strongest clean dips only; for each pair, every period gap/n down to P_MIN is tested on all of them
+            # at once, so that dips spread over years cost seconds, not hours
+            ev = sorted((e for e in events if e[5] in ('', 'edge')), key=lambda e: -e[3])[:MAX_PAIR_DIPS]
+            tv, dv = np.array([e[1] for e in ev]), np.array([e[2] for e in ev])
+            trials = {}
             for i in range(len(ev)):
                 for j in range(i + 1, len(ev)):
                     a_, b_ = ev[i], ev[j]
                     if not (0.65 < a_[2] / b_[2] < 1.55) or 'edge' in a_[5] + b_[5] and a_[5] == b_[5] == 'edge':
                         continue
                     g = abs(b_[1] - a_[1])
-                    if g < 0.5:
+                    if g < P_MIN:
                         continue
-                    for n in range(1, int(g / 0.5) + 1):
-                        P = g / n
-                        ph = np.array([(((e[1] - a_[1]) / P + 0.5) % 1 - 0.5) * P for e in ev])
-                        sup = [e for e, x in zip(ev, ph) if abs(x) < tol and 0.65 < e[2] / a_[2] < 1.55]
+                    check_time()
+                    Ps = g / np.arange(1, int(g / P_MIN) + 1)
+                    x = (((tv - a_[1]) / Ps[:, None] + 0.5) % 1 - 0.5) * Ps[:, None]
+                    sup = (np.abs(x) < tol) & (0.65 < dv / a_[2]) & (dv / a_[2] < 1.55)
+                    for P, row, n in zip(Ps.tolist(), sup, sup.sum(axis=1).tolist()):
                         key = round(P, 3)
-                        if len(sup) >= 2 and (key not in trials or len(sup) > len(trials[key][1])):
-                            trials[key] = (P, sup)
-        if not trials:
+                        if n >= 2 and (key not in trials or n > trials[key][1]):
+                            trials[key] = (P, n, row)
+            if trials:
+                from scipy.stats import binom
+                n_ev = max(1, len(events) - 2)
+                v = list(trials.values())
+                Ps, ns = np.array([x[0] for x in v]), np.array([x[1] for x in v])
+                # -log10 chance that the extra dips line up with this period by accident
+                sig = np.where(ns > 2, -np.log10(np.maximum(binom.sf(ns - 3, n_ev, np.minimum(1.0, 2 * tol / Ps)), 1e-300)), 0.0)
+                ranked = [(v[k][0], [e for e, m in zip(ev, v[k][2]) if m]) for k in np.lexsort((-Ps, -sig))[:300]]
+        if not ranked:
             raise RuntimeError(f'fewer than two consistent dips on re-analysis: {[(e[0], round(e[1], 3), round(e[2]), e[5]) for e in events]}')
-        from scipy.stats import binom
-        n_ev = max(1, len(events) - 2)
-        def signif(P, sup):  # -log10 chance that the extra dips line up with this period by accident
-            p = min(1.0, 2 * tol / P)
-            return -np.log10(max(binom.sf(len(sup) - 3, n_ev, p), 1e-300)) if len(sup) > 2 else 0.0
-        ranked = sorted(trials.values(), key=lambda v: (-signif(*v), -v[0]))[:300]
         alive, tried = [], []
+        dt_T = np.median(np.diff(T[:2000]))
         for P, sup in ranked:
-            sg = signif(P, sup)
+            check_time()
             tt = np.array(sorted(e[1] for e in sup))
             ep = np.round((tt - tt[0]) / P)
             P, t0 = np.polyfit(ep, tt, 1) if np.ptp(ep) > 0 else (P, tt[0])
             exp = float(np.median([e[2] for e in sup])) / 1e6
             n0, n1 = int(np.floor((T[0] - t0) / P)) - 1, int(np.ceil((T[-1] - t0) / P)) + 1
             ok, seen, misses, sw, sdw = True, 0, [], 0.0, 0.0
-            for n in range(n0, n1 + 1):
-                tc = t0 + n * P
-                if coverage(T, tc, dur_d) < 0.6:
-                    continue
+            tcs = t0 + np.arange(n0, n1 + 1) * P
+            cov = (np.searchsorted(T, tcs + dur_d / 2) - np.searchsorted(T, tcs - dur_d / 2)) * dt_T / dur_d  # coverage()
+            for tc in tcs[cov >= 0.6]:
                 bd = box_depth(T, Y, tc, dur_d)
                 if bd is None:
                     continue
@@ -411,10 +431,11 @@ def vet(con, tic, findings):
 
         # ---- plots: each covered transit, then the fold
         tr = sorted({int(n) for n in n_all[np.abs(T - (t0 + n_all * P)) < t14 / 2]})
-        ncol = min(4, max(1, len(tr)))
-        nrow = int(np.ceil(len(tr) / ncol)) + 1
+        shown = tr[:MAX_PANELS]   # stars observed for years have hundreds of transits; the fold shows them all
+        ncol = min(4, max(1, len(shown)))
+        nrow = int(np.ceil(len(shown) / ncol)) + 1
         fig = plt.figure(figsize=(4 * ncol, 3 * nrow))
-        for i, n in enumerate(tr):
+        for i, n in enumerate(shown):
             ax = fig.add_subplot(nrow, ncol, i + 1)
             tc = t0 + n * P
             m = np.abs(T - tc) < 1.0
@@ -447,6 +468,11 @@ def vet(con, tic, findings):
                     'WHERE tic=?', (status, P, t0, dep * 1e6, t14 * 24, snr, score,
                                     '; '.join(reasons + notes), time.strftime('%Y-%m-%d %H:%M'), tic))
         con.commit()
+    except VetTimeout as e:
+        con.execute("UPDATE candidate SET status='vet_error', notes=?, updated=? WHERE tic=?",
+                    (str(e), time.strftime('%Y-%m-%d %H:%M'), tic))
+        con.commit()
+        (outdir / 'report.md').write_text(f'# TIC {tic}\n\nNot vetted: {e}\n')
     except RuntimeError as e:
         con.execute("UPDATE candidate SET status='rejected', notes=?, updated=? WHERE tic=?",
                     (str(e), time.strftime('%Y-%m-%d %H:%M'), tic))

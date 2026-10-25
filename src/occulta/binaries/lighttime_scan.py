@@ -2,6 +2,10 @@
 eclipses (eb/<TIC>_eclipses.csv, QLP Sectors 99-104 excluded) over a grid of Pout, and lists the best periods and any
 fixed periods given (e.g. a Gaia DR3 orbital period). Usage: occulta binaries lighttime-scan <TIC> <P_d> <T0_btjd> [Pout_fixed ...]"""
 import numpy as np, pandas as pd, sys
+
+from .. import paths
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     tic=int(argv[0]); P0=float(argv[1]); T00=float(argv[2])

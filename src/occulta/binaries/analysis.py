@@ -30,7 +30,8 @@ from .. import lightcurves as lcsearch, planets as vet  # noqa: E402
 
 OUT = paths.BIN / 'eb'
 WORK = ROOT / 'data' / 'cache' / 'ebvet'
-PIX = 21.0  # TESS pixel, arcsec
+PIX = 21.0  # TESS pixel, arcsec (Ricker et al. 2015)
+KEPLER_PIX = 3.98  # Kepler and K2 pixel, arcsec (Koch et al. 2010); units >= 2000 are K2 campaigns and Kepler quarters
 
 
 # ------------------------------------------------------------------ data
@@ -312,7 +313,7 @@ def analyse(tic, P, t0, t14_h, gaia):
             cx, cy = CX[m], CY[m]
             dx = np.median(cx[inn]) - np.median(cx[out]); dy = np.median(cy[inn]) - np.median(cy[out])
             ex = lcsearch.mad_std(cx[out]) / np.sqrt(inn.sum()); ey = lcsearch.mad_std(cy[out]) / np.sqrt(inn.sum())
-            shifts.append((int(u), np.hypot(dx, dy) * PIX, np.hypot(dx / ex, dy / ey) if ex > 0 and ey > 0 else np.nan))
+            shifts.append((int(u), np.hypot(dx, dy) * (KEPLER_PIX if u >= 2000 else PIX), np.hypot(dx / ex, dy / ey) if ex > 0 and ey > 0 else np.nan))
     oot = lcsearch.mad_std(Y[np.abs(((ph + 0.5) % 1) - 0.5) > 3 * hw])
 
     res = {'tic': tic, 'period_survey': P_survey, 'period': Pt, 'doubled': bool(double), 't0_btjd': float(t0),

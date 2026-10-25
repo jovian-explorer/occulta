@@ -7,6 +7,9 @@ t_peri_gaia_d is Gaia's t_periastron (days from J2016.0 = JD 2457389.0)."""
 import sys
 import numpy as np, pandas as pd
 
+from .. import paths
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     tic, P0, T00, Pout, ecc, tp, A, B, F, G = int(argv[0]), *map(float, argv[1:10])
