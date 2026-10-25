@@ -4,31 +4,59 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23634486.svg)](https://doi.org/10.5281/zenodo.23634486)
 
-occulta, Latin for hidden things, is a blind search of the photometry of the Transiting Exoplanet Survey Satellite (TESS), K2, and Kepler for transiting planets and eclipsing binaries that no published catalogue contains. It streams the light curves of every star in a chosen brightness range, searches each of them for individual dips and periodic signals, stitches dips from different sectors into candidates, and vets every candidate first as a planet and then, when the signal is stellar, as an eclipsing binary. The user chooses which of the two hunts to run: planets alone, eclipsing binaries alone, or both together.
-
 > **occulta is public** (pre-release 0.0.1). It is ready for use and for testing; results can still change between versions. Please report problems, wrong results and suggestions on the [issue tracker](https://github.com/jovian-explorer/occulta/issues/new/choose). To cite occulta, use the DOI [10.5281/zenodo.23634486](https://doi.org/10.5281/zenodo.23634486) (all versions; see [CITATION.cff](CITATION.cff)).
 
-## Why a blind search
+occulta, Latin for hidden things, is a blind search of the photometry of the Transiting Exoplanet Survey Satellite (TESS), K2, and Kepler for transiting planets and eclipsing binaries that no published catalogue contains. Space photometry records such objects whether or not anyone looks for them, so that the archives still contain signals that the catalogues built from the same data have not listed, in particular single transits from different years, long periods, and eclipses diluted by neighbouring stars. Since a signal is new only when it is absent from every catalogue, when its period is the true one, and when it belongs to the star it is attributed to, every step that decides whether a detection is real is part of the code, documented in [METHODS.md](METHODS.md), and repeatable from public data with a single command.
 
-Space photometry records transiting planets and eclipsing binaries whether or not anyone looks for them, so that the archives of TESS, K2, and Kepler still contain signals that the catalogues built from the same data have not listed, in particular single transits from different years, long periods, and eclipses diluted by neighbouring stars. At the same time, a signal is new only when it is absent from every catalogue, when its period is the true one, and when it belongs to the star it is attributed to, and each of these conditions has failed for some of the candidates that this search has examined. In occulta, therefore, every step that decides whether a detection is real is part of the code, documented in METHODS.md, and repeatable from public data with a single command.
+## What can I do with it?
 
-## Installation
+* **Hunt for planets, eclipsing binaries, or both**: occulta streams the light curves of every star in a chosen brightness range, searches each of them for individual dips and periodic signals, stitches dips from different sectors into candidates, and vets every candidate first as a planet and then, when the signal is stellar, as an eclipsing binary.
+* **Check whether a signal is already known**: every candidate is cross-matched with VSX, GCVS, Gaia DR3, the TESS eclipsing-binary catalogues, the TESS Objects of Interest, and SIMBAD.
+* **Find the star that is eclipsed**: difference images of the TESS pixels, modelled with the Gaia positions of every nearby star, assign the eclipses to their source.
+* **Measure an eclipsing binary**: the ephemeris, both eclipses, the secondary phase sector by sector, odd and even eclipses, eclipse timing, and the light-travel time of a third body compared with Gaia astrometric orbits.
+* **Repeat any result**: `occulta reproduce TIC` repeats the whole analysis of one star from public data, so that every claim can be checked by others.
 
-```
-pip install git+https://github.com/jovian-explorer/occulta
-```
+## Quick start
 
-or, from a copy of this repository,
+1. Install occulta with pip (details in [How to Install and Run](#-how-to-install-and-run)).
+2. Create a working directory and run one session of the search:
+   ```
+   occulta init
+   occulta survey run --minutes 55 --mode both
+   ```
+3. Follow the progress with `occulta survey status` and `occulta survey map`; candidates and reports go to `findings/`.
+
+---
+
+## 📡 Data Sources & Provenance
+
+All data are downloaded from the Mikulski Archive for Space Telescopes (MAST), the Gaia archive, and VizieR as they are needed, and the search runs through them in the order set in `config.json`, each step from the newest to the oldest sector.
+
+| Step | Data | Stars |
+|---|---|---|
+| 1 | TESS full-frame images, MIT Quick-Look Pipeline (QLP) | TESS magnitude ≤ 10 |
+| 2 | K2, K2SFF light curves | every K2 target |
+| 3 | TESS 2-minute cadence, Science Processing Operations Center (SPOC) | every 2-minute target |
+| 4 | TESS QLP | 10 < T ≤ 11 |
+| 5 | Kepler long cadence | every Kepler target |
+| 6 | TESS QLP | 11 < T ≤ 12 |
+| 7 | TESS QLP | 12 < T ≤ 13.5 |
+
+The catalogues used for vetting are VSX, GCVS, Gaia DR3 (including its non-single-star orbits), the TESS eclipsing-binary catalogues of Prša et al. (2022) and Kostov et al. (2025), the TESS Input Catalog, and SIMBAD; METHODS.md gives the references, collected in docs/refs.bib.
+
+---
+
+## 🚀 How to Install and Run
+
+### Install with pip (Python 3.10+)
+
+From a copy of this repository, or from the source archive on the [Releases](https://github.com/jovian-explorer/occulta/releases) page:
 
 ```
 pip install .
 ```
 
-Python 3.10 or later is required. All data are downloaded from the Mikulski Archive for Space Telescopes (MAST), the Gaia archive, and VizieR as they are needed.
-
-## Usage
-
-Every command works inside one working directory, which holds the database of the search, the cache of light curves, and the findings; it is chosen with `--home`, with the environment variable `OCCULTA_HOME`, or, by default, as the current directory.
+### Command-line options
 
 ```
 occulta init                                      # create the working directory and its configuration
@@ -41,8 +69,6 @@ occulta binaries --help                           # the tools for eclipsing bina
 ```
 
 The option `--mode` decides what is hunted. With `planets`, the survey searches the light curves and vets each candidate as a planet, and stellar signals are set aside. With `binaries`, every signal that the planet vetting rejects for a stellar reason, and that no catalogue of variable stars contains, is analysed as an eclipsing binary; with `both`, the default, the two hunts run together.
-
-### Tools for eclipsing binaries
 
 | Command | What it does |
 |---|---|
@@ -57,34 +83,34 @@ The option `--mode` decides what is hunted. With `planets`, the survey searches 
 | `occulta binaries lighttime ...` | fits the eclipse times with the light-travel time of a Gaia astrometric orbit |
 | `occulta binaries report TIC` | parameter table and figure for a report |
 
-## The plan of the search
+### Where occulta keeps its files
 
-The configuration in `config.json` lists the data in the order in which they are searched, and each step runs from the newest to the oldest sector.
+Every command works inside one working directory, which holds the database of the search and the cache of light curves (`data/`), the logs (`logs/`), the binary analyses (`binaries/`), and the findings (`findings/`). It is chosen with `--home`, with the environment variable `OCCULTA_HOME`, or, by default, as the current directory.
 
-| Step | Data | Stars |
-|---|---|---|
-| 1 | TESS full-frame images, MIT Quick-Look Pipeline (QLP) | TESS magnitude ≤ 10 |
-| 2 | K2, K2SFF light curves | every K2 target |
-| 3 | TESS 2-minute cadence, SPOC | every 2-minute target |
-| 4 | TESS QLP | 10 < T ≤ 11 |
-| 5 | Kepler long cadence | every Kepler target |
-| 6 | TESS QLP | 11 < T ≤ 12 |
-| 7 | TESS QLP | 12 < T ≤ 13.5 |
-
-## Tests
-
-```
-pip install .[test]
-pytest                          # offline checks
-OCCULTA_ONLINE=1 pytest         # also recovers two known objects from public data (about 15 minutes)
-```
-
-The recovery tests require that the pipeline find, with no prior information, the planet candidate TIC 402710280.01 at 36.340 d and the eccentric eclipsing binary CPD−37 4813 at 10.7598 d.
-
-## Methods and citation
-
-METHODS.md describes every step of the search and of the vetting, with references in docs/refs.bib. If you use occulta, please cite it as described in [CITATION.cff](CITATION.cff): Aggarwal, K. 2026, occulta: a blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries, Zenodo, doi:10.5281/zenodo.23634486.
+---
 
 ## Licence
 
-MIT; see LICENSE.
+occulta is free software under the MIT licence (`LICENSE`).
+
+---
+
+## 👨‍🔬 Creator & Lead Architect
+
+* **Keshav Aggarwal**
+  * **Current Affiliation:** Student Visitor, Space Physics Laboratory (SPL), Vikram Sarabhai Space Centre (VSSC), Indian Space Research Organisation (ISRO), Thiruvananthapuram.
+  * **Doctoral Education:** Ph.D. in Astronomy and Space Engineering, Department of Astronomy, Astrophysics and Space Engineering (DAASE), Indian Institute of Technology (IIT) Indore (Thesis Submitted).
+  * **Fellowship:** Prime Minister's Research Fellow (PMRF).
+  * **Research Focus:** Planetary/exoplanetary atmospheres, ionospheres, planetary radio occultation, solar-planetary space weather interactions across MOM, Chandrayaan-2, Chandrayaan-3, Akatsuki, and Aditya-L1.
+
+---
+
+## 🧪 Automated Test Suite
+
+```
+pip install .[test]
+python -m pytest                          # offline checks
+OCCULTA_ONLINE=1 python -m pytest         # also recovers two known objects from public data (about 15 minutes)
+```
+
+The recovery tests require that the pipeline find, with no prior information, the planet candidate TIC 402710280.01 at 36.340 d and the eccentric eclipsing binary CPD−37 4813 at 10.7598 d. The workflow `.github/workflows/ci.yml` runs the offline checks on Windows, macOS and Linux for every push to `main` and every pull request, on a copy of the tests against the installed package.
