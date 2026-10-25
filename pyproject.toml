@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "occulta"
-version = "0.1.0"
+version = "0.0.1"
 description = "A blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries"
 readme = "README.md"
 requires-python = ">=3.10"

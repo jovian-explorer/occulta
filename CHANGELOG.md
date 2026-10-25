@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 (2026-10-25)
+## 0.0.1 (2026-10-25)
 
-First public version.
+First public pre-release.
 
 - Blind search of TESS QLP and SPOC, K2SFF and Kepler light curves: individual dips and periodic signals in every light curve, dips from different sectors stitched into candidates, and a plan of seven steps worked through from the newest to the oldest sector (`occulta survey run`).
 - Vetting of every candidate as a planet: period from all aliases allowed by the dips, trapezoid fit, and rejection tests for stellar radii, V shapes, odd and even depths, secondary eclipses, Gaia astrometry, systematics, depth changes between epochs, stellar density, and coherent pulsations.

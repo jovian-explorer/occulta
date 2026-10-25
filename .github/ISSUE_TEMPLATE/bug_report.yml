@@ -23,7 +23,7 @@ body:
     id: version
     attributes:
       label: occulta version, Python version and operating system
-      placeholder: "0.1.0 (occulta --version), Python 3.12, Windows 11"
+      placeholder: "0.0.1 (occulta --version), Python 3.12, Windows 11"
     validations:
       required: true
   - type: textarea
