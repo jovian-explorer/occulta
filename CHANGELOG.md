@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `occulta survey map` shades the sky by the number of TESS sectors per position (grey scale), outlines the 20 K2 campaign fields and the Kepler field, and prints the MAST light-curve totals per product. The shading needs the optional package tess-point (`pip install tess-point`, or `pip install ".[map]"`); without it the map is drawn without shading. The footprint (20,000 positions, about 7 min of CPU) is computed once and cached as `data/footprint.npz` in the working directory.
+- `occulta survey map` also works on a working directory where `survey status` has not been run yet.
+- `occulta binaries rerun` without a TIC re-analyses every analysed binary from the cached light curves, and `--divide N` re-analyses at 1/N of the adopted period (a survey period that is N times the true one).
+- The Ricker et al. (TESS) reference is 2015 in the text and in `docs/refs.bib`.
+- Offline tests of the detrending, the single-event search, and the planet-vetting cuts (stellar depth, secondary eclipse, alternating depths, too few dips) on synthetic light curves.
+
 - `occulta planets vet TIC` now vets a star that the survey has not promoted; before, every dip was dropped for want of a candidate depth and the star was always rejected.
 - Centroid shifts of Kepler and K2 data are converted with the Kepler pixel (3.98 arcsec) instead of the TESS pixel (21 arcsec), which had overstated them by a factor of 5.3.
 - `occulta binaries lighttime` and `occulta binaries lighttime-scan` no longer stop with a NameError.

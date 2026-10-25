@@ -36,12 +36,12 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 | SPOC and Kepler flux | l. 47 | PDCSAP, quality flag 0 | Smith et al. 2012; Stumpe et al. 2012; Jenkins et al. 2016 | sourced |
 | K2 flux | l. 41 | K2SFF `FCOR`, thruster firings (`MOVING`) dropped | Vanderburg & Johnson 2014 | sourced |
 | Kepler/K2 time to BTJD | l. 24 | BKJD + 2454833 − 2457000 | mission definitions of BKJD and BTJD | sourced |
-| Detrending | `detrend`, l. 65-80 | running median of 2 d per segment, segments split at gaps > 0.5 d, upward outliers > 4 MAD removed | choice | untested |
+| Detrending | `detrend`, l. 65-80 | running median of 2 d per segment, segments split at gaps > 0.5 d, upward outliers > 4 MAD removed | choice | tested: `test_detrend_removes_a_slow_trend_and_keeps_the_dip`, `test_detrend_works_per_segment_across_a_gap_and_clips_only_upward_outliers` |
 | Box durations | l. 10 | 1 to 13 h, nine widths | choice | untested |
-| Single-event detection | `single_events` | min(white, red) S/N ≥ 7, at most 5 dips per light curve | choice | untested |
+| Single-event detection | `single_events` | min(white, red) S/N ≥ 7, at most 5 dips per light curve | choice | tested: `test_single_event_search_finds_a_dip_above_the_threshold`, `test_single_event_search_ignores_noise_and_dips_below_the_threshold`, `test_single_event_search_reports_each_of_several_dips_once` |
 | False-alarm level | `process`, l. 231 | strongest dip of the inverted light curve, away from edges | choice (inverted-light-curve test as in common transit-search practice; no single source) | untested |
-| V-shape flag | l. 166 | depth of outer quarters / centre < 0.35 | choice | untested |
-| Background and centroid flags | l. 178 | excursion > 6σ against the flanks | choice | untested |
+| V-shape flag | l. 166 | depth of outer quarters / centre < 0.35 | choice | tested: `test_characterise_flags_a_v_shaped_dip_and_a_dip_at_a_gap_edge` |
+| Background and centroid flags | l. 178 | excursion > 6σ against the flanks | choice | tested: `test_characterise_flags_a_background_excursion` (background only) |
 | Common-mode systematics | `survey.mark_systematics` | ≥ 5 stars on one CCD within ±0.1 d | choice | untested |
 | BLS | `run_bls` | Astropy BLS (Kovács et al. 2002; Astropy Collaboration 2022), 20-min bins, 0.5 d to 15 d (30 d for baselines > 40 d), durations 1-6 h, objective S/N | sourced | untested |
 | BLS SDE | l. 205 | (peak − median) / standard deviation of the S/N periodogram | Kovács et al. 2002 define the SDE with the mean of the signal residue; the median used here is slightly larger than the mean for a skewed periodogram, so that the SDE is marginally lower (conservative) | choice, noted |
@@ -63,10 +63,10 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 | Trapezoid fit | `trapezoid`, l. 91 | depth, T14, ingress time | choice (standard trapezoid approximation) | tested (F1 test) |
 | Radius | l. 337 | Rp = √depth × R★ (TIC), no dilution correction | sourced (geometric) | untested; the TIC contamination ratio is reported but not applied |
 | Stellar-size limit | l. 350 | Rp > 24 R⊕ (about 2.1 RJ) | choice: about the radius of the largest known inflated hot Jupiters | untested |
-| Depth limit | l. 351 | depth > 25 % | choice | untested |
+| Depth limit | l. 351 | depth > 25 % | choice | tested: `test_vetting_rejects_a_stellar_depth` |
 | V shape | l. 353 | ingress fraction 2 T12 / T14 > 0.8 | choice | untested |
-| Odd/even | l. 297-312, 354 | ≥ 2 fully covered transits of each parity, difference > 3σ | choice | untested |
-| Secondary eclipse | l. 330, 355 | phase 0.5 only, > 3σ | choice; eccentric secondaries away from phase 0.5 are not tested here (they are in the binary analysis) | untested |
+| Odd/even | l. 297-312, 354 | ≥ 2 fully covered transits of each parity, difference > 3σ | choice | tested: `test_vetting_rejects_alternating_depths` |
+| Secondary eclipse | l. 330, 355 | phase 0.5 only, > 3σ | choice; eccentric secondaries away from phase 0.5 are not tested here (they are in the binary analysis) | tested: `test_vetting_rejects_a_secondary_eclipse` |
 | Gaia RUWE | l. 357 | > 1.4 | Lindegren et al. 2021 | sourced, untested |
 | Gaia eclipsing binary | `gaia_checks` | target in `vari_eclipsing_binary` | Mowlavi et al. 2023 | sourced, untested |
 | Nearest Gaia source as target | `gaia_checks`, l. 139 | nearest source within 60 arcsec, not matched by the TIC Gaia identifier | choice | untested; a high-proper-motion star could be matched to a neighbour |
@@ -126,7 +126,7 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 
 ## References checked with Argus
 
-All DOIs in `docs/refs.bib` resolve to the cited works. Argus marks nine as "suspect" only for benign reasons: the Gaia DR3 papers (Gaia Collaboration 2023a, b; Halbwachs; Mowlavi; Rimoldini) and Lindegren et al. 2021 carry their subtitle in the registry as a separate field, SIMBAD (Wenger et al. 2000) likewise, and Stumpe et al. 2012 is registered with its first page only. Ricker et al. is registered by Crossref with the online year 2014; METHODS.md cites it as 2015, the year of the journal volume. Watson et al. 2006 (VSX) and Kopal 1959 have no DOI. The Zenodo record of TIC 402710280.01 (Vora 2026) was checked through OpenAlex.
+All DOIs in `docs/refs.bib` resolve to the cited works. Argus marks ten as "suspect" only for benign reasons: the Gaia DR3 papers (Gaia Collaboration 2023a, b; Halbwachs; Mowlavi; Rimoldini) and Lindegren et al. 2021 carry their subtitle in the registry as a separate field, SIMBAD (Wenger et al. 2000) likewise, and Stumpe et al. 2012 is registered with its first page only. Ricker et al. (2015) is registered by Crossref with the online date of 24 October 2014 and the page range 1-10; text and `refs.bib` both give 2015, the year of the journal volume, and the article number 014003, so Argus marks its first page. Watson et al. 2006 (VSX) and Kopal 1959 have no DOI. The Zenodo record of TIC 402710280.01 (Vora 2026) was checked through OpenAlex.
 
 ## Open items
 

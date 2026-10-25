@@ -11,14 +11,14 @@ def _transits(t, P, t0, depth, dur_d):
     return np.where(np.abs(ph * P) < dur_d / 2, -depth, 0.0)
 
 
-def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min=10, noise=400e-6):
+def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min=10, noise=400e-6, extra=None):
     """Vet star 1 by hand on synthetic sectors of 26 d that begin at `starts`; returns (status, period, notes)."""
     from occulta import planets, survey
     rng = np.random.default_rng(1)
     lcs = {}
     for k, start in enumerate(starts):
         t = np.arange(start, start + 26, cadence_min / 1440)
-        lcs[str(k)] = (t, _transits(t, P, t0, depth, dur) + rng.normal(0, noise, t.size))
+        lcs[str(k)] = (t, _transits(t, P, t0, depth, dur) + rng.normal(0, noise, t.size) + (extra(t) if extra else 0.0))
     monkeypatch.setattr(planets, 'fetch_all', lambda sid, work: [('QLP', k + 1, str(k)) for k in range(len(starts))])
     monkeypatch.setattr(planets, 'series', lambda author, path: lcs[path])
     monkeypatch.setattr(planets, 'get_star', lambda con, sid: None)
@@ -106,3 +106,34 @@ def test_promote_counts_a_transit_seen_by_qlp_and_spoc_once(tmp_path):
     con.commit()
     assert survey.promote(con) == 1
     assert con.execute('SELECT n_events FROM candidate WHERE tic=7').fetchone()[0] == 2
+
+
+def _eb_home(tmp_path, monkeypatch, tics=(11, 12)):
+    """A home with two analysed binaries (period 4 d) and a recording replacement of the analysis."""
+    import json
+    from occulta.binaries import analysis, rerun
+    eb = tmp_path / 'eb'; eb.mkdir()
+    called = []
+    for tic in tics:
+        (eb / f'{tic}.json').write_text(json.dumps({'period': 4.0, 't0_btjd': 1001.0, 'width_h': 20.0}))
+        (tmp_path / 'findings' / f'TIC{tic}').mkdir(parents=True)
+        (tmp_path / 'findings' / f'TIC{tic}' / 'summary.json').write_text(json.dumps({'t14_h': 5.0}))
+    (eb / 'notes.json').write_text('{}')                       # not a star
+    monkeypatch.setattr(rerun, 'ROOT', tmp_path)
+    monkeypatch.setattr(analysis, 'OUT', eb)
+    monkeypatch.setattr(analysis, 'analyse', lambda tic, P, t0, w, gaia: called.append((tic, P, w)) or {
+        'period': P, 't0_btjd': t0, 'secondary': {'phase': 0.5}})
+    return rerun, called
+
+
+def test_rerun_without_a_tic_redoes_every_analysed_star(tmp_path, monkeypatch, capsys):
+    rerun, called = _eb_home(tmp_path, monkeypatch)
+    rerun.main([])
+    assert [c[0] for c in called] == [11, 12] and all(c[1] == 4.0 for c in called)
+    assert capsys.readouterr().out.count('P 4.0000000 -> 4.0000000') == 2
+
+
+def test_rerun_divide_analyses_at_a_fraction_of_the_period(tmp_path, monkeypatch):
+    rerun, called = _eb_home(tmp_path, monkeypatch)
+    rerun.main(['--divide', '2', '12'])
+    assert called == [(12, 2.0, 12.0)]         # the width is limited to a quarter of the shorter period

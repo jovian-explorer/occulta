@@ -28,7 +28,7 @@ BINARY_TOOLS = {
     'dips': ('dips', 'list every dip of a star, sector by sector: TIC [K]'),
     'report': ('report', 'parameter table and figure for a report: TIC ...'),
     'catalogue': ('catalogue', 'rebuild the catalogue of reviewed binaries'),
-    'rerun': ('rerun', 're-analyse binaries at their adopted periods: TIC ...'),
+    'rerun': ('rerun', 're-analyse binaries at their adopted periods: [--divide N] [TIC ...] (no TIC: every analysed star)'),
 }
 
 
