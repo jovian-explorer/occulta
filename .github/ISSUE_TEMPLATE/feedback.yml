@@ -1,0 +1,16 @@
+name: Feedback or suggestion
+description: Comments on the search, the vetting, missing catalogues or analyses, documentation
+labels: [feedback]
+body:
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Your comments
+      description: What did you try to do, what helped, what got in the way, what is missing?
+    validations:
+      required: true
+  - type: input
+    id: context
+    attributes:
+      label: Your field and the data you work with (optional)
+      placeholder: "e.g. eclipsing binaries, transit timing, TESS full-frame images"

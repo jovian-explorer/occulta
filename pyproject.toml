@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "occulta"
+version = "0.1.0"
+description = "A blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Keshav Aggarwal", email = "keshavaggarwal2310@gmail.com"}]
+keywords = ["astronomy", "TESS", "exoplanets", "eclipsing binaries", "photometry", "Gaia"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy", "scipy", "pandas", "matplotlib", "requests", "astropy", "astroquery", "lightkurve", "psutil",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+occulta = "occulta.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+occulta = ["default_config.json"]

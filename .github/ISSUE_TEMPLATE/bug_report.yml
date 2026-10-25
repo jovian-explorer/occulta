@@ -1,0 +1,33 @@
+name: Problem or wrong result
+description: Something does not work, crashes, or gives a result you think is wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thank you for testing occulta. The more exact the steps, the faster the problem can be fixed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The command you ran, with the TIC number and the options.
+      placeholder: "occulta reproduce 181149914 --mode both"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: occulta version, Python version and operating system
+      placeholder: "0.1.0 (occulta --version), Python 3.12, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log or error message
+      description: Paste the console output, or logs/survey.log from the working directory.

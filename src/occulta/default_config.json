@@ -1,0 +1,37 @@
+{
+ "disk_cap_gb": 30,
+ "raw_cap_gb": 2,
+ "download_threads": 16,
+ "workers": 6,
+ "event_snr": 9.0,
+ "inv_ratio": 1.2,
+ "bls_snr": 10.0,
+ "bls_sde": 9.0,
+ "common_mode_n": 5,
+ "plan": [
+  {
+   "mission": "QLP",
+   "tmag": 10.0
+  },
+  {
+   "mission": "K2"
+  },
+  {
+   "mission": "SPOC"
+  },
+  {
+   "mission": "QLP",
+   "tmag": 11.0
+  },
+  {
+   "mission": "Kepler"
+  },
+  {
+   "mission": "QLP",
+   "tmag": 12.0
+  },
+  {
+   "mission": "QLP"
+  }
+ ]
+}

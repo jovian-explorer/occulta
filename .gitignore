@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+/build/
+/dist/
+.pytest_cache/
+# working-directory output when occulta is run inside the repository
+/data/
+/findings/
+/logs/
+/binaries/
+/reproduce_out/
+/config.json

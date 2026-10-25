@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use occulta in your work, please cite it, together with the data sets and catalogues that it lists for each result."
+title: "occulta: a blind search of TESS, K2 and Kepler photometry for uncatalogued transiting planets and eclipsing binaries"
+type: software
+authors:
+  - family-names: Aggarwal
+    given-names: Keshav
+    email: keshavaggarwal2310@gmail.com
+version: 0.1.0
+license: MIT
+date-released: 2026-10-25
+abstract: >-
+  occulta is a Python package for a blind search of the photometry of TESS, K2 and Kepler
+  for transiting planets and eclipsing binaries that no published catalogue contains. It
+  searches every light curve of the stars in a chosen brightness range for individual dips
+  and periodic signals, stitches dips from different sectors into candidates, vets each
+  candidate as a planet, and analyses stellar signals as eclipsing binaries: ephemerides,
+  eclipses fitted one by one, secondary phases and eccentricities, eclipse timing compared
+  between pipelines, assignment of the eclipses to their star with difference images of
+  the TESS pixels, uniform photometry of the full-frame images, and comparison of eclipse
+  timing with Gaia DR3 astrometric orbits. The user chooses planet hunting, binary
+  hunting, or both, and any detection can be repeated from public data with one command.
+repository-code: "https://github.com/jovian-explorer/occulta"
+url: "https://jovian-explorer.github.io/software.html#occulta"
+keywords:
+  - exoplanets
+  - eclipsing binaries
+  - TESS
+  - Kepler
+  - K2
+  - Gaia
+  - photometry
+  - transit search
