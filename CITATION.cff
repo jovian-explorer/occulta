@@ -5,6 +5,7 @@ type: software
 authors:
   - family-names: Aggarwal
     given-names: Keshav
+    affiliation: "Space Physics Laboratory (SPL), Vikram Sarabhai Space Centre (VSSC), ISRO"
     email: keshavaggarwal2310@gmail.com
 version: 0.0.1
 license: MIT
