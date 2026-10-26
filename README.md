@@ -74,6 +74,7 @@ occulta init                                      # create the working directory
 occulta survey run --minutes 55 --mode both       # one resumable work session of the blind search
 occulta survey status                             # progress and candidates
 occulta survey map                                # map of the plan and of the stars searched, on the TESS sector count if tess-point is installed (pip install tess-point)
+occulta survey map --refresh-totals               # the same, with the MAST light-curve totals counted now (cached in the home)
 occulta reproduce 181149914 --mode both           # repeat the whole analysis of one star from public data
 occulta planets vet 402710280                     # vet one star as a planet host
 occulta binaries --help                           # the tools for eclipsing binaries

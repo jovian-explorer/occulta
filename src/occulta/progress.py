@@ -1,6 +1,6 @@
 """Progress map of the search: (top) the plan as a grid of TESS sectors x plan steps, coloured by state; (bottom) the sky
 positions of every star searched so far, coloured by the state of its light curve, on a sky shaded by the number of TESS
-sectors per position when tess-point is installed (pip install tess-point). Usage: occulta survey map"""
+sectors per position when tess-point is installed (pip install tess-point). Usage: occulta survey map [--refresh-totals]"""
 import json, sqlite3
 from pathlib import Path
 
@@ -15,11 +15,39 @@ from matplotlib.patches import Patch
 
 ROOT = paths.HOME
 NS = 104
-# light curves in MAST on 25 Oct 2026, millions
-MAST_TOTALS = {'QLP': 107.6, 'SPOC 2-min': 1.84, 'K2SFF': 0.45, 'Kepler': 0.21}
+# light curves in MAST, millions, with the date of the count: the fallback of `survey map --refresh-totals`
+MAST_TOTALS = {'QLP': (107.6, '2026-10-25'), 'SPOC 2-min': (1.84, '2026-10-25'), 'K2SFF': (0.45, '2026-10-25'),
+               'Kepler': (0.21, '2026-10-25')}
+# MAST catalogue filters of the products it can count in seconds; the QLP count (HLSP) times out and keeps its dated value
+MAST_COUNT = {'SPOC 2-min': {'obs_collection': 'TESS', 'provenance_name': 'SPOC', 'dataproduct_type': 'timeseries'},
+              'K2SFF': {'obs_collection': 'HLSP', 'provenance_name': 'K2SFF'},
+              'Kepler': {'obs_collection': 'Kepler', 'dataproduct_type': 'timeseries'}}
 K2 = [(98.30, 21.59), (173.94, 1.42), (246.12, -22.44), (336.67, -11.10), (59.08, 18.66), (130.16, 16.83), (204.86, -11.29),
       (287.83, -23.36), (16.31, 5.25), (270.35, -21.78), (186.78, -4.03), (260.32, -23.98), (351.66, -5.10), (72.79, 20.79),
       (160.68, 6.85), (233.61, -20.08), (133.65, 18.53), (202.50, -7.72), (130.69, 16.83), (347.21, -4.21)]
+
+
+def mast_totals(refresh=False):
+    """Light-curve totals {product: (millions, date)}: the dated numbers above, replaced by <home>/data/mast_totals.json
+    when it exists; with refresh the products of MAST_COUNT are counted at MAST now and the file is rewritten."""
+    f = ROOT / 'data' / 'mast_totals.json'
+    tot = dict(MAST_TOTALS)
+    if f.exists():
+        tot.update({k: tuple(v) for k, v in json.loads(f.read_text()).items()})
+    if refresh:
+        import datetime, requests
+        for k, flt in MAST_COUNT.items():
+            req = {'service': 'Mast.Caom.Filtered', 'format': 'json', 'params': {
+                'columns': 'COUNT_BIG(*)', 'filters': [{'paramName': a, 'values': [b]} for a, b in flt.items()]}}
+            try:
+                r = requests.post('https://mast.stsci.edu/api/v0/invoke', data={'request': json.dumps(req)}, timeout=120)
+                r.raise_for_status()
+                tot[k] = (round(r.json()['data'][0]['Column1'] / 1e6, 3), datetime.date.today().isoformat())
+            except Exception as e:
+                print(f'{k}: the MAST count failed ({repr(e)[:80]}); keeping {tot[k][0]:g} M of {tot[k][1]}')
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(tot))
+    return tot
 
 
 def footprint(n=20000):
@@ -54,8 +82,9 @@ def circle(ax, ra0, dec0, r, **kw):
         ax.plot(xs, ys, **(kw if k == 0 else {**kw, 'label': None}))
 
 
-def main(argv=None):
+def main(refresh_totals=False):
     from . import survey
+    totals = ', '.join(f'{k} {v:g} M ({d})' for k, (v, d) in mast_totals(refresh_totals).items())
     if not (ROOT / 'data' / 'hunt.db').exists():      # a new working directory: draw the map of an empty search
         (ROOT / 'data').mkdir(parents=True, exist_ok=True)
         survey.db(ROOT / 'data' / 'hunt.db').close()
@@ -107,7 +136,7 @@ def main(argv=None):
     for i, (r0, d0) in enumerate(K2):
         circle(ax2, r0, d0, 6.5, color='#1f5fa8', lw=0.8, zorder=3, label='K2 campaigns' if i == 0 else None)
     circle(ax2, 290.67, 44.5, 7.5, color='#8e24aa', lw=1.2, zorder=3, label='Kepler field')
-    print('light curves in MAST (25 Oct 2026): ' + ', '.join(f'{k} {v:g} M' for k, v in MAST_TOTALS.items()))
+    print('light curves in MAST: ' + totals)
     rows = np.array(con.execute('SELECT t.ra, t.dec, MIN(g.status) FROM target g JOIN tic t ON t.tic = g.tic '
                                 'WHERE t.ra IS NOT NULL GROUP BY g.tic').fetchall(), float)
     if rows.size:
@@ -117,8 +146,7 @@ def main(argv=None):
             ax2.scatter(-ra[m], dec[m], s=0.3, c=c, label=f'{l} ({m.sum():,})', rasterized=True, zorder=2)
     ax2.grid(True, lw=0.3); ax2.set_xticklabels([])
     ax2.legend(loc='lower left', bbox_to_anchor=(0, -0.12), ncol=3, markerscale=15, frameon=False)
-    ax2.set_title('Stars searched so far (equatorial, Mollweide); MAST light curves, 25 Oct 2026: ' +
-                  ', '.join(f'{k} {v:g} M' for k, v in MAST_TOTALS.items()), fontsize=9)
+    ax2.set_title('Stars searched so far (equatorial, Mollweide); MAST light curves: ' + totals, fontsize=8)
     out = ROOT / 'findings' / 'progress' / 'progress_map.png'
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=110); print(out, done_lc, total_q)

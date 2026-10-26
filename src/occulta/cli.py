@@ -47,7 +47,9 @@ def main(argv=None):
                    help='planets: search and vet planet candidates only; binaries or both: also analyse every '
                         'uncatalogued stellar signal as an eclipsing binary')
     ss.add_parser('status', help='progress and candidates')
-    ss.add_parser('map', help='map of the plan and of the stars searched (findings/progress/progress_map.png)')
+    m = ss.add_parser('map', help='map of the plan and of the stars searched (findings/progress/progress_map.png)')
+    m.add_argument('--refresh-totals', action='store_true',
+                   help='count SPOC, K2SFF and Kepler light curves in MAST now and keep the result in <home>/data/mast_totals.json (QLP keeps its dated number)')
     rp = sp.add_parser('reproduce', help='repeat the analysis of one star from public data', add_help=False)
     rp.add_argument('args', nargs=argparse.REMAINDER)
     pl = sp.add_parser('planets', help='planet hunting')
@@ -82,7 +84,7 @@ def main(argv=None):
             print(dashboard.write())
         else:
             from . import progress
-            progress.main()
+            progress.main(a.refresh_totals)
     elif a.cmd == 'reproduce':
         from . import reproduce
         reproduce.main(a.args)
@@ -93,6 +95,8 @@ def main(argv=None):
     elif a.cmd == 'binaries':
         import importlib
         mod = importlib.import_module(f'occulta.binaries.{BINARY_TOOLS[a.tool][0]}')
+        if {'-h', '--help'} & set(a.args):      # every tool opens with its usage
+            print(mod.__doc__); return
         mod.main(a.args)
 
 

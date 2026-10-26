@@ -39,6 +39,7 @@ def test_status_and_map_of_a_new_working_directory(tmp_path):
 
 
 def test_survey_stops_cleanly_when_the_known_lists_cannot_be_downloaded(tmp_path, monkeypatch):
+    import json
     import requests
     from occulta import survey
     for name in ('ROOT', 'RAW', 'CACHE', 'FIND', 'LOGS'):
@@ -89,3 +90,35 @@ def test_footprint_from_tess_point_is_cached_in_the_home(tmp_path, monkeypatch):
     assert (tmp_path / 'data' / 'footprint.npz').exists()
     monkeypatch.setattr(t2p, 'tess_stars2px_function_entry', None)    # a second call must read the cache
     assert (progress.footprint(200)[2] == nsec).all()
+
+
+def test_refresh_totals_counts_at_mast_keeps_the_cache_and_falls_back_on_failure(tmp_path, monkeypatch, capsys):
+    """`--refresh-totals` replaces the dated numbers of the products that MAST counts, writes them to the home, and
+    keeps the dated number of a product whose count fails; without the option the cache is read and nothing is queried."""
+    import json
+    import requests
+    from occulta import progress
+    monkeypatch.setattr(progress, 'ROOT', tmp_path)
+    assert progress.mast_totals() == progress.MAST_TOTALS                       # no cache: the dated numbers
+
+    def post(url, data, timeout):
+        flt = json.loads(data['request'])['params']['filters']
+        if any(f['values'] == ['K2SFF'] for f in flt):
+            raise requests.exceptions.ReadTimeout('slow')
+        resp = type('R', (), {'raise_for_status': lambda s: None, 'json': lambda s: {'data': [{'Column1': 2_345_678}]}})()
+        return resp
+    monkeypatch.setattr(requests, 'post', post)
+    tot = progress.mast_totals(refresh=True)
+    assert tot['SPOC 2-min'][0] == 2.346 and tot['Kepler'][0] == 2.346 and tot['SPOC 2-min'][1] > '2026-10-25'
+    assert tot['K2SFF'] == progress.MAST_TOTALS['K2SFF'] and tot['QLP'] == progress.MAST_TOTALS['QLP']
+    assert 'K2SFF: the MAST count failed' in capsys.readouterr().out
+    monkeypatch.setattr(requests, 'post', None)                                 # a plain call reads the file
+    assert progress.mast_totals()['Kepler'][0] == 2.346
+
+
+@pytest.mark.parametrize('tool', sorted(__import__('occulta.cli', fromlist=['x']).BINARY_TOOLS))
+def test_every_binaries_tool_prints_its_usage_for_help(tool, tmp_path):
+    """`occulta binaries <tool> --help` printed a ValueError for tools that read their arguments by position."""
+    out = subprocess.run([sys.executable, '-W', 'ignore', '-m', 'occulta.cli', '--home', str(tmp_path), 'binaries', tool, '--help'],
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and 'Usage' in out.stdout and 'Traceback' not in out.stderr, (out.stdout, out.stderr[-300:])

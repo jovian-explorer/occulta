@@ -11,8 +11,11 @@ def _transits(t, P, t0, depth, dur_d):
     return np.where(np.abs(ph * P) < dur_d / 2, -depth, 0.0)
 
 
-def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min=10, noise=400e-6, extra=None):
-    """Vet star 1 by hand on synthetic sectors of 26 d that begin at `starts`; returns (status, period, notes)."""
+def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min=10, noise=400e-6, extra=None,
+                   star=None, cand=None, gaia=None, other=None):
+    """Vet star 1 by hand on synthetic sectors of 26 d that begin at `starts`; returns (status, period, notes).
+    `star` is a TIC row (ra, dec, tmag, teff, rad, mass, dist, gaia, contratio); `cand` a BLS ephemeris (period, t0, dur_h,
+    depth_ppm) that stands in for the survey's candidate. `gaia` is the answer of the Gaia checks (empty by default); `other` is (period, t0) of another candidate."""
     from occulta import planets, survey
     rng = np.random.default_rng(1)
     lcs = {}
@@ -21,9 +24,15 @@ def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min
         lcs[str(k)] = (t, _transits(t, P, t0, depth, dur) + rng.normal(0, noise, t.size) + (extra(t) if extra else 0.0))
     monkeypatch.setattr(planets, 'fetch_all', lambda sid, work: [('QLP', k + 1, str(k)) for k in range(len(starts))])
     monkeypatch.setattr(planets, 'series', lambda author, path: lcs[path])
-    monkeypatch.setattr(planets, 'get_star', lambda con, sid: None)
+    monkeypatch.setattr(planets, 'get_star', lambda con, sid: star)
+    monkeypatch.setattr(planets, 'gaia_checks', lambda *a: gaia or {})
     con = survey.db(tmp_path / 'hunt.db')
-    con.execute("INSERT INTO candidate(tic, kind, status) VALUES (1, 'manual', 'new')")
+    if cand:
+        con.execute("INSERT INTO candidate(tic, kind, period, t0, dur_h, depth_ppm, snr, status) VALUES (1, 'bls', ?, ?, ?, ?, 20, 'new')", cand)
+    else:
+        con.execute("INSERT INTO candidate(tic, kind, status) VALUES (1, 'manual', 'new')")
+    if other:
+        con.execute("INSERT INTO candidate(tic, kind, period, t0, status) VALUES (2, 'bls', ?, ?, 'new')", other)
     planets.vet(con, 1, tmp_path / 'findings')
     return con.execute('SELECT status, period, notes FROM candidate WHERE tic=1').fetchone()
 

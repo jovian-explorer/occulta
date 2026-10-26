@@ -28,6 +28,12 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 * Section 6, item 9, said that the light-travel-time fit at the Gaia epoch is compared with fits at trial epochs spread over the outer period; the code (`lighttime.py:45-49`) moves the outer period by up to 3 d and the epoch of periastron by up to 25 d around the Gaia values.
 * Section 9 said `pip install occulta`, but occulta is not on PyPI; it now installs from GitHub.
 
+### F5. `gaia_checks` could take a neighbour for the target
+* **Where**: `src/occulta/planets.py` (`gaia_checks`).
+* **Problem**: the target was the Gaia source nearest to the TIC position, and the Gaia identifier that the TIC lists was not used. For a high-proper-motion star, or in a crowded field, the nearest source can be a faint neighbour, so that the RUWE and the eclipsing-binary flag of the wrong star were reported and the real star was listed as a blend.
+* **Fix**: the source with the TIC's Gaia identifier is the target when it lies within the 60 arcsec; the nearest source remains the fallback when the TIC has no identifier, and the target is skipped in the list of blends by its identifier.
+* **Test**: `test_gaia_checks_use_the_tic_gaia_identifier_not_the_nearest_source`. No threshold changed, so that no new citation was needed.
+
 ## Search of each light curve (`lightcurves.py`)
 
 | Item | Where | Value | Source | Status |
@@ -42,18 +48,18 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 | False-alarm level | `process`, l. 231 | strongest dip of the inverted light curve, away from edges | choice (inverted-light-curve test as in common transit-search practice; no single source) | untested |
 | V-shape flag | l. 166 | depth of outer quarters / centre < 0.35 | choice | tested: `test_characterise_flags_a_v_shaped_dip_and_a_dip_at_a_gap_edge` |
 | Background and centroid flags | l. 178 | excursion > 6σ against the flanks | choice | tested: `test_characterise_flags_a_background_excursion` (background only) |
-| Common-mode systematics | `survey.mark_systematics` | ≥ 5 stars on one CCD within ±0.1 d | choice | untested |
+| Common-mode systematics | `survey.mark_systematics` | ≥ 5 stars on one CCD within ±0.1 d | choice | tested: `test_common_mode_flag_needs_five_events_within_a_fifth_of_a_day_on_one_ccd` |
 | BLS | `run_bls` | Astropy BLS (Kovács et al. 2002; Astropy Collaboration 2022), 20-min bins, 0.5 d to 15 d (30 d for baselines > 40 d), durations 1-6 h, objective S/N | sourced | untested |
 | BLS SDE | l. 205 | (peak − median) / standard deviation of the S/N periodogram | Kovács et al. 2002 define the SDE with the mean of the signal residue; the median used here is slightly larger than the mean for a skewed periodogram, so that the SDE is marginally lower (conservative) | choice, noted |
-| BLS acceptance | `survey.promote`, l. 389; `default_config.json` | S/N ≥ 10, SDE ≥ 9, ≥ 3 transits, odd/even < 3σ | choice | untested |
+| BLS acceptance | `survey.promote`, l. 389; `default_config.json` | S/N ≥ 10, SDE ≥ 9, ≥ 3 transits, odd/even < 3σ | choice | tested at each limit: `test_bls_candidates_need_snr_sde_three_transits_and_a_consistent_odd_even` |
 
 ## Candidates across units (`survey.py`)
 
 | Item | Where | Value | Source | Status |
 |---|---|---|---|---|
-| Dip S/N for stitching | `promote`; config `event_snr` | ≥ 9 and ≥ 1.2 × false-alarm level | choice | untested |
-| Depth and duration agreement | l. 369 | depth ratio 0.6-1.6, duration ratio 0.5-2 | choice | untested |
-| Known-object match | `known_match`, l. 333 | ±0.3 d of a TOI, CTOI, KOI, K2 or confirmed-planet ephemeris; any EB-catalogue entry sets the star aside | Prša et al. 2022; Kirk et al. 2016 | sourced |
+| Dip S/N for stitching | `promote`; config `event_snr` | ≥ 9 and ≥ 1.2 × false-alarm level | choice | tested: `test_stitching_needs_strong_similar_dips_above_the_false_alarm_level` |
+| Depth and duration agreement | l. 369 | depth ratio 0.6-1.6, duration ratio 0.5-2 | choice | tested (same test, both sides of each limit) |
+| Known-object match | `known_match`, l. 333 | ±0.3 d of a TOI, CTOI, KOI, K2 or confirmed-planet ephemeris; any EB-catalogue entry sets the star aside | Prša et al. 2022; Kirk et al. 2016 | sourced, tested: `test_stitching_skips_dips_of_a_known_ephemeris_and_catalogued_binaries` and the BLS test |
 
 ## Vetting as a planet (`planets.py`)
 
@@ -61,24 +67,24 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 |---|---|---|---|---|
 | Period from aliases | l. 202-272 | every P = Δt/n of a pair of dips; rejected when a covered epoch shows < 2σ and falls > 4σ short of the expected depth; shortest period within 90 % of the best stacked S/N | choice | tested (F1 test) |
 | Trapezoid fit | `trapezoid`, l. 91 | depth, T14, ingress time | choice (standard trapezoid approximation) | tested (F1 test) |
-| Radius | l. 337 | Rp = √depth × R★ (TIC), no dilution correction | sourced (geometric) | untested; the TIC contamination ratio is reported but not applied |
-| Stellar-size limit | l. 350 | Rp > 24 R⊕ (about 2.1 RJ) | choice: about the radius of the largest known inflated hot Jupiters | untested |
+| Radius | l. 337 | Rp = √depth × R★ (TIC), no dilution correction | sourced (geometric) | tested: `test_planet_radius_follows_the_depth_and_the_tic_radius`; the TIC contamination ratio is reported but not applied |
+| Stellar-size limit | l. 350 | Rp > 24 R⊕ (about 2.1 RJ) | choice: about the radius of the largest known inflated hot Jupiters | tested on both sides of the limit: `test_vetting_rejects_a_stellar_size_radius_only_above_24_earth_radii`, and a deep dip on a star without radius: `test_vetting_rejects_a_deep_dip_on_a_star_without_radius` |
 | Depth limit | l. 351 | depth > 25 % | choice | tested: `test_vetting_rejects_a_stellar_depth` |
-| V shape | l. 353 | ingress fraction 2 T12 / T14 > 0.8 | choice | untested |
+| V shape | l. 353 | ingress fraction 2 T12 / T14 > 0.8 | choice | tested: `test_vetting_rejects_a_v_shaped_transit` (the clean planet of the F1 test stays below the limit) |
 | Odd/even | l. 297-312, 354 | ≥ 2 fully covered transits of each parity, difference > 3σ | choice | tested: `test_vetting_rejects_alternating_depths` |
 | Secondary eclipse | l. 330, 355 | phase 0.5 only, > 3σ | choice; eccentric secondaries away from phase 0.5 are not tested here (they are in the binary analysis) | tested: `test_vetting_rejects_a_secondary_eclipse` |
-| Gaia RUWE | l. 357 | > 1.4 | Lindegren et al. 2021 | sourced, untested |
-| Gaia eclipsing binary | `gaia_checks` | target in `vari_eclipsing_binary` | Mowlavi et al. 2023 | sourced, untested |
-| Nearest Gaia source as target | `gaia_checks`, l. 139 | nearest source within 60 arcsec, not matched by the TIC Gaia identifier | choice | untested; a high-proper-motion star could be matched to a neighbour |
-| Blend depth | l. 149-152 | neighbour listed when depth / flux fraction < 1 | sourced (dilution geometry) | untested |
+| Gaia RUWE | l. 357 | > 1.4 | Lindegren et al. 2021 | sourced, tested at 1.40 and 1.41 with a mocked archive |
+| Gaia eclipsing binary | `gaia_checks` | target in `vari_eclipsing_binary` | Mowlavi et al. 2023 | sourced, tested with a mocked archive |
+| Target source | `gaia_checks`, l. 139 | the source with the TIC's Gaia identifier among those within 60 arcsec, else the nearest | choice | fixed (F5), tested |
+| Blend depth | l. 149-152 | neighbour listed when depth / flux fraction < 1 | sourced (dilution geometry) | tested: a neighbour 2 mag fainter explains a 5 % dip, not a 20 % one |
 | Folded S/N | l. 358 | < 10 rejects | choice | tested (F1 test) |
-| Steps and ramps | l. 358-360 | baseline step > 0.5 depth and > 3σ in ≥ half the epochs | choice | untested |
+| Steps and ramps | l. 358-360 | baseline step > 0.5 depth and > 3σ in ≥ half the epochs | choice | tested: `test_vetting_rejects_a_step_instead_of_a_transit` |
 | Individual epochs | l. 362-366 | ≥ 2 epochs at ≥ 5σ with depth 0.4-2.5 × mean | choice | tested (F1 test) |
-| Depth changes | l. 367-373 | χ² probability < 10⁻⁶ and ratio > 2.5 | choice | untested |
-| Stellar density | l. 339-342, 374-383 | ρ★ = 3π (a/R★)³ / (G P²) with a/R★ = P (1 + k) / (π T14) for a central transit; rejected below 0.2 × the TIC density | Seager & Mallén-Ornelas 2003 | sourced, untested |
+| Depth changes | l. 367-373 | χ² probability < 10⁻⁶ and ratio > 2.5 | choice | tested: `test_vetting_rejects_depths_that_change_between_sectors` (4000 against 1300 ppm) |
+| Stellar density | l. 339-342, 374-383 | ρ★ = 3π (a/R★)³ / (G P²) with a/R★ = P (1 + k) / (π T14) for a central transit; rejected below 0.2 × the TIC density | Seager & Mallén-Ornelas 2003 | sourced, tested: the formula against the summary value, and both density branches (ratio 0.10 and 0.013) |
 | Equilibrium temperature | l. 343 | Teff √(R★ / 2a) (1 − A)^¼ with A = 0.3 | standard; the albedo 0.3 is a choice | reported only |
-| Pulsators | l. 384-394 | Lomb-Scargle above 1.5 / T14, semi-amplitude > 0.5 × depth | Lomb 1976; Scargle 1982 | sourced, untested |
-| Sector-synchronised systematics | l. 376-379 | another candidate within 0.3 % in period and 0.3 d in epoch | choice | untested |
+| Pulsators | l. 384-394 | Lomb-Scargle above 1.5 / T14, semi-amplitude > 0.5 × depth | Lomb 1976; Scargle 1982 | sourced, tested at 0.7 and 0.2 × the depth |
+| Sector-synchronised systematics | l. 376-379 | another candidate within 0.3 % in period and 0.3 d in epoch | choice | tested: `test_vetting_rejects_a_signal_shared_with_another_candidate_within_the_tolerance` |
 
 ## Analysis as an eclipsing binary (`binaries/analysis.py`)
 
@@ -100,11 +106,11 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 
 | Item | Where | Value | Source | Status |
 |---|---|---|---|---|
-| Cutouts | l. 100 | 15 × 15 TESScut pixels | TESScut (MAST) | untested |
-| In and out of eclipse | l. 120-121 | in: \|Δt\| < 0.25 D; out: 0.75-1.5 D on both sides | choice | untested |
-| Sources modelled | l. 104-105 | Gaia DR3 sources with G < G_target + 4, blends within 8″ merged | choice | untested |
-| PSF model | `fit_out` | circular Gaussian, common width 0.4-1.6 px and offset ≤ 1 px, flat background; sector skipped when σ > 1.55 px or offset > 0.95 px | choice (approximation; the TESS PRF is not Gaussian) | untested |
-| Decision | l. 136-159 | single source with the lowest χ²; χ² ratio to the runner-up | choice | untested |
+| Cutouts | l. 100 | 15 × 15 TESScut pixels | TESScut (MAST) | untested (needs the live service; the analysis of a cutout file is tested) |
+| In and out of eclipse | l. 120-121 | in: \|Δt\| < 0.25 D; out: 0.75-1.5 D on both sides | choice | tested: `test_pixel_model_finds_which_star_eclipses` |
+| Sources modelled | l. 104-105 | Gaia DR3 sources with G < G_target + 4, blends within 8″ merged | choice | tested: `test_sources_closer_than_8_arcsec_are_merged_into_one_blend`; the G cut is applied in `main` and not tested separately |
+| PSF model | `fit_out` | circular Gaussian, common width 0.4-1.6 px and offset ≤ 1 px, flat background; sector skipped when σ > 1.55 px or offset > 0.95 px | choice (approximation; the TESS PRF is not Gaussian) | tested on a synthetic Gaussian field (the limits for a skipped sector are not) |
+| Decision | l. 136-159 | single source with the lowest χ²; χ² ratio to the runner-up | choice | tested: an eclipse on the target and on a neighbour 3 px away give the right source, and the lost fraction (25 %) is recovered |
 
 ## Gaia comparison (`binaries/gaia.py`, `lighttime.py`, `lighttime_scan.py`)
 
@@ -112,9 +118,9 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 |---|---|---|---|---|
 | Gaia match | `gaia.py:28` | brightest source within 3″ | choice | untested |
 | NSS tables | `gaia.py:10` | two-body orbit, acceleration, non-linear spectroscopic, VIM | Gaia Collaboration, Arenou et al. 2023; Halbwachs et al. 2023 | sourced |
-| ω from Thiele-Innes elements | `lighttime.py:19` | ω = ½[atan2(B − F, A + G) + atan2(−B − F, A − G)], ambiguous by 180° (absorbed by the sign of K) | Halbwachs et al. 2023 (Thiele-Innes inversion) | sourced, untested |
+| ω from Thiele-Innes elements | `lighttime.py:19` | ω = ½[atan2(B − F, A + G) + atan2(−B − F, A − G)], ambiguous by 180° (absorbed by the sign of K) | Halbwachs et al. 2023 (Thiele-Innes inversion) | sourced, tested: ω = 40° recovered from A, B, F, G of an orbit with Ω = 70°, i = 60° |
 | Gaia epoch | l. 18 | t_periastron counted from JD 2457389.0 (J2016.0) | Gaia DR3 documentation | sourced |
-| Light-travel time | `shape`, l. 22-28 | (1 − e²)/(1 + e cos ν) sin(ν + ω) + e sin ω, amplitude free | Irwin 1952 | sourced, untested |
+| Light-travel time | `shape`, l. 22-28 | (1 − e²)/(1 + e cos ν) sin(ν + ω) + e sin ω, amplitude free | Irwin 1952 | sourced, tested: a 3 min term of e = 0.4 is fitted with a χ² below 10⁻³ of the linear fit and K = 3.0 min (`test_lighttime_fit_recovers_a_gaia_shaped_term_and_omega_from_thiele_innes`) |
 | Outer-period scan | `lighttime_scan.py` | sinusoid, 20-3000 d, 20 000 log-spaced periods | choice | tested (F3 test) |
 
 ## Catalogue cross-match (`binaries/catalogues.py`, `crossmatch.py`)
@@ -130,7 +136,6 @@ All DOIs in `docs/refs.bib` resolve to the cited works. Argus marks ten as "susp
 
 ## Open items
 
-* Most rejection tests of the planet vetting run only in the online recovery tests; each could get a synthetic case like F1.
+* Every threshold of the planet vetting, the stitching, the Gaia checks, the pixel model and the light-travel-time fit now has an offline test (batch 3). The values were compared with their sources (RUWE 1.4, the density relation, the Irwin and Thiele-Innes formulae) and agree; no threshold had to change. Still untested offline: the TESScut download, the Gaia match radius of `binaries/gaia.py`, the catalogue radii, the generalised-Gaussian eclipse fit, the e cos ω and e sin ω formulae, the Roche ratio of the triage, the box durations, and the false-alarm level.
 * The planet radius ignores the TIC contamination ratio, which is reported but not applied; a diluted star gives a radius that is too small.
-* `gaia_checks` takes the nearest Gaia source within 60″ instead of the TIC's Gaia identifier.
 * The pixel-level assignment uses a Gaussian PSF, which is an approximation of the TESS pixel response function.

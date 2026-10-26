@@ -145,13 +145,17 @@ def gaia_checks(ra, dec, gaia_id, depth):
                FROM gaiadr3.gaia_source WHERE 1=CONTAINS(POINT(ra,dec), CIRCLE({ra},{dec},{60/3600}))"""
         tab = Gaia.launch_job(q).get_results()
         tab.sort('sep')
-        tgt = tab[0]
+        # the TIC's own Gaia identifier names the target (a high-proper-motion star can lie farther away than a neighbour)
+        mine = [i for i, sid in enumerate(tab['source_id']) if str(sid) == str(gaia_id)]
+        tgt = tab[mine[0]] if mine else tab[0]
         out['ruwe'] = float(tgt['ruwe']) if tgt['ruwe'] is not None else None
         out['non_single_star'] = int(tgt['non_single_star'] or 0)
         out['variable'] = str(tgt['phot_variable_flag'])
         g0 = float(tgt['phot_g_mean_mag'])
         blends = []
-        for r in tab[1:]:
+        for r in tab:
+            if r['source_id'] == tgt['source_id']:
+                continue
             if r['phot_g_mean_mag'] is None or not np.isfinite(r['phot_g_mean_mag']):
                 continue
             frac = 10 ** (-0.4 * (float(r['phot_g_mean_mag']) - g0))

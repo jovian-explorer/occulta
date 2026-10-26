@@ -1,4 +1,5 @@
-"""List every dip deeper than k times the scatter, per sector, for one star (from the cached light curve)."""
+"""List every dip deeper than k times the scatter, per sector, for one star (from the cached light curve).
+Usage: occulta binaries dips TIC [K]"""
 import sys
 from pathlib import Path
 import numpy as np

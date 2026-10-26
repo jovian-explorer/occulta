@@ -7,6 +7,10 @@
 - `occulta binaries rerun` without a TIC re-analyses every analysed binary from the cached light curves, and `--divide N` re-analyses at 1/N of the adopted period (a survey period that is N times the true one).
 - The Ricker et al. (TESS) reference is 2015 in the text and in `docs/refs.bib`.
 - Offline tests of the detrending, the single-event search, and the planet-vetting cuts (stellar depth, secondary eclipse, alternating depths, too few dips) on synthetic light curves.
+- `occulta survey map --refresh-totals` counts the SPOC, K2SFF and Kepler light curves at MAST and keeps the numbers in `data/mast_totals.json` of the working directory; the dated numbers of 25 October 2026 remain the fallback, and the QLP number, which MAST cannot count in reasonable time, keeps its date.
+- `occulta binaries <tool> --help` prints the usage of every tool; before, tools that read their arguments by position stopped with a ValueError.
+- `gaia_checks` takes the source with the TIC's Gaia identifier as the target of the RUWE, eclipsing-binary, and blend checks, and the nearest source only when the TIC has none; before, a faint neighbour nearer to the catalogue position could be taken for the star.
+- Offline tests of the stellar-radius, V-shape, step, depth-change, density, and pulsator cuts, the Gaia checks (mocked archive), the stitching and BLS limits, the common-mode flag, the pixel model, and the light-travel-time fit (`docs/MODEL_AUDIT.md`).
 
 - `occulta planets vet TIC` now vets a star that the survey has not promoted; before, every dip was dropped for want of a candidate depth and the star was always rejected.
 - Centroid shifts of Kepler and K2 data are converted with the Kepler pixel (3.98 arcsec) instead of the TESS pixel (21 arcsec), which had overstated them by a factor of 5.3.
