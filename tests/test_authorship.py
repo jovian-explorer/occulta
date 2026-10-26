@@ -2,7 +2,11 @@
 affiliation but not the visitor title."""
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
+# The installed-package CI job runs the tests outside the source tree.
+pytestmark = pytest.mark.skipif(not (ROOT / "LICENSE").exists(), reason="source tree not present")
 
 
 def test_license_names_no_institution():
