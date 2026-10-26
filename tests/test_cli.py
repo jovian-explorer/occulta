@@ -122,3 +122,44 @@ def test_every_binaries_tool_prints_its_usage_for_help(tool, tmp_path):
     out = subprocess.run([sys.executable, '-W', 'ignore', '-m', 'occulta.cli', '--home', str(tmp_path), 'binaries', tool, '--help'],
                          capture_output=True, text=True)
     assert out.returncode == 0 and 'Usage' in out.stdout and 'Traceback' not in out.stderr, (out.stdout, out.stderr[-300:])
+
+
+def _cli(*args, cwd=None, env=None):
+    import os
+    e = {k: v for k, v in os.environ.items() if k != 'OCCULTA_HOME'}
+    e.update(env or {})
+    return subprocess.run([sys.executable, '-W', 'ignore', '-m', 'occulta.cli', *args], capture_output=True, text=True,
+                          cwd=cwd, env=e)
+
+
+def test_no_working_directory_gives_a_hint_not_a_new_folder(tmp_path):
+    out = _cli('survey', 'status', cwd=tmp_path)
+    assert out.returncode != 0 and 'occulta init' in out.stderr and '--home' in out.stderr
+    assert list(tmp_path.iterdir()) == []          # nothing was created behind the user's back
+    assert _cli('init', cwd=tmp_path).returncode == 0
+    assert _cli('survey', 'status', cwd=tmp_path).returncode == 0     # after init the current directory is a home
+
+
+def test_a_name_instead_of_a_tic_number_is_explained(tmp_path):
+    for cmd in (('reproduce', 'WASP-18'), ('planets', 'vet', 'TOI-185')):
+        out = _cli('--home', str(tmp_path), *cmd)
+        assert out.returncode != 0 and 'is not a TIC number' in out.stderr and 'Traceback' not in out.stderr
+
+
+def test_unknown_tic_and_no_network_are_explained(tmp_path, monkeypatch):
+    import requests
+    from occulta import planets, reproduce
+    monkeypatch.setenv('OCCULTA_HOME', str(tmp_path))
+    monkeypatch.setattr(reproduce.paths, 'init', lambda: tmp_path)
+    monkeypatch.setattr(reproduce, 'ROOT', tmp_path)
+    monkeypatch.setattr(planets, 'fetch_all', lambda tic, d: [])
+    with pytest.raises(SystemExit) as e:
+        reproduce.main(['99999999999'])
+    assert 'No TESS, K2 or Kepler light curves of TIC 99999999999' in str(e.value)
+
+    def offline(tic, d):
+        raise requests.exceptions.ConnectionError('no route')
+    monkeypatch.setattr(planets, 'fetch_all', offline)
+    with pytest.raises(SystemExit) as e:
+        reproduce.main(['410153553'])
+    assert 'Could not reach the MAST archive' in str(e.value) and 'internet connection' in str(e.value)

@@ -22,12 +22,32 @@ occulta, Latin for hidden things, is a blind search of the photometry of the Tra
    ```
    pip install "git+https://github.com/jovian-explorer/occulta.git"
    ```
-2. Create a working directory and run one session of the search:
+2. Create an empty working directory, enter it, and run one session of the search (the same commands work in the Windows Command Prompt and PowerShell, in macOS, and in Linux; a command given outside a working directory stops with a message instead of filling the current folder):
    ```
+   mkdir occulta_work
+   cd occulta_work
    occulta init
    occulta survey run --minutes 55 --mode both
    ```
 3. Follow the progress with `occulta survey status` and `occulta survey map`; candidates and reports go to `findings/`.
+
+### Worked example: WASP-18 b
+
+To see the code recover a known planet before any search is started, repeat the analysis of WASP-18 (TIC 100100827), a hot Jupiter that Hellier et al. ([2009](https://doi.org/10.1038/nature08245)) found with an orbital period of 0.94 d. In the same working directory, run
+
+```
+occulta reproduce 100100827 --mode planets
+```
+
+occulta downloads the 23 light curves of the star from MAST, searches each of them with no information on the planet, stitches the dips into one candidate, vets it, and looks the star up in the catalogues. On an ordinary connection the run takes about 10 minutes, most of it the download, and the result is written to `reproduce_out/100100827/`. The expected values, from a run on 26 October 2026 with 226 transits in 10 TESS sectors, are:
+
+| Quantity | occulta | Literature |
+|---|---|---|
+| Period | 0.94145 d | 0.94145 d (Hellier et al. 2009) |
+| Depth | 9,670 ppm (0.97 %) | about 1 % |
+| Duration | 2.20 h | about 2.2 h |
+
+These numbers move in the last digit as TESS adds sectors. The report `reproduce_out/100100827/TIC100100827/report.md` marks the candidate as rejected, which is the correct outcome for the code: the occultation of this very hot planet is a real secondary eclipse (24 sigma here), which the planet vetting treats as a stellar signal, and the catalogue step lists the signal as already known (VSX, Gaia DR3, the TESS eclipsing-binary catalogue, and the TOI list as TOI 185.01), so that it would not be counted as new.
 
 ---
 
@@ -97,7 +117,7 @@ The option `--mode` decides what is hunted. With `planets`, the survey searches 
 
 ### Where occulta keeps its files
 
-Every command works inside one working directory, which holds the database of the search and the cache of light curves (`data/`), the logs (`logs/`), the binary analyses (`binaries/`), and the findings (`findings/`). It is chosen with `--home`, with the environment variable `OCCULTA_HOME`, or, by default, as the current directory.
+Every command works inside one working directory, which holds the database of the search and the cache of light curves (`data/`), the logs (`logs/`), the binary analyses (`binaries/`), and the findings (`findings/`). It is chosen with `--home`, with the environment variable `OCCULTA_HOME`, or, by default, as the current directory when that folder was created with `occulta init`.
 
 ---
 
@@ -120,9 +140,9 @@ occulta is free software under the MIT licence (`LICENSE`).
 ## 🧪 Automated Test Suite
 
 ```
-pip install .[test]
+pip install ".[test]"
 python -m pytest                          # offline checks
-OCCULTA_ONLINE=1 python -m pytest         # also recovers two known objects from public data (about 15 minutes)
+OCCULTA_ONLINE=1 python -m pytest         # also recovers two known objects from public data (about 15 minutes); on Windows: set OCCULTA_ONLINE=1 first
 ```
 
 The recovery tests require that the pipeline find, with no prior information, the planet candidate TIC 402710280.01 at 36.340 d and the eccentric eclipsing binary CPD−37 4813 at 10.7598 d. The workflow `.github/workflows/ci.yml` runs the offline checks on Windows, macOS and Linux for every push to `main` and every pull request, on a copy of the tests against the installed package.

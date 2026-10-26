@@ -12,6 +12,7 @@ OCCULTA_HOME, or the current directory), which holds the database, the cache, an
 import argparse
 import os
 import sys
+from pathlib import Path
 
 BINARY_TOOLS = {
     'crossmatch': ('crossmatch', 'cross-match every stellar signal with the catalogues of variable stars'),
@@ -30,6 +31,19 @@ BINARY_TOOLS = {
     'catalogue': ('catalogue', 'rebuild the catalogue of reviewed binaries'),
     'rerun': ('rerun', 're-analyse binaries at their adopted periods: [--divide N] [TIC ...] (no TIC: every analysed star)'),
 }
+
+
+def tic_arg(text):
+    """A TIC number given on the command line, with a hint when a name or a TOI number was typed instead."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f'"{text}" is not a TIC number. Give the TESS Input Catalog number only, for example 100100827 for '
+            'WASP-18 (names and TOI numbers are not accepted; look the star up on https://exofop.ipac.caltech.edu/tess/).')
+    if n <= 0:
+        raise argparse.ArgumentTypeError('a TIC number is a positive integer, for example 100100827')
+    return n
 
 
 def main(argv=None):
@@ -54,7 +68,7 @@ def main(argv=None):
     rp.add_argument('args', nargs=argparse.REMAINDER)
     pl = sp.add_parser('planets', help='planet hunting')
     pls = pl.add_subparsers(dest='sub', required=True)
-    v = pls.add_parser('vet', help='vet one star as a planet host'); v.add_argument('tic', type=int)
+    v = pls.add_parser('vet', help='vet one star as a planet host'); v.add_argument('tic', type=tic_arg)
     b = sp.add_parser('binaries', help='eclipsing-binary hunting',
                       description='\n'.join(f'  {k:15s} {d}' for k, (_, d) in BINARY_TOOLS.items()),
                       formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -71,6 +85,10 @@ def main(argv=None):
         ap.print_help(); return
     # the working directory is fixed only now, so that every module sees the same one
     from . import paths
+    if a.cmd in ('survey', 'planets', 'binaries') and not (a.home or os.environ.get('OCCULTA_HOME'))             and not (Path.cwd() / 'config.json').exists():
+        sys.exit(f'There is no occulta working directory here ({Path.cwd()}). Create one with "occulta init" '
+                 '(in an empty folder), or point to an existing one with --home FOLDER or the environment '
+                 'variable OCCULTA_HOME.')
     if a.cmd == 'init':
         print('working directory:', paths.init())
     elif a.cmd == 'survey':

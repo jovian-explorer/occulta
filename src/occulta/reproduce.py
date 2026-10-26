@@ -37,7 +37,8 @@ def code_hashes():
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='occulta reproduce', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('tic', type=int)
+    from .cli import tic_arg
+    ap.add_argument('tic', type=tic_arg)
     ap.add_argument('--out', default=None)
     ap.add_argument('--mode', choices=('planets', 'binaries', 'both'), default='both',
                     help='planets: stop after the planet vetting; binaries: analyse the signal as an eclipsing binary '
@@ -56,10 +57,16 @@ def main(argv=None):
         print(m, flush=True); log.append(m)
 
     # 1. data
-    files = vet.fetch_all(tic, out / 'raw')
+    try:
+        files = vet.fetch_all(tic, out / 'raw')
+    except OSError as e:     # requests' exceptions and the socket errors are all OSError
+        sys.exit(f'Could not reach the MAST archive ({type(e).__name__}). Check the internet connection (and the proxy '
+                 'settings, if your network uses one) and run the command again.')
     say(f'{len(files)} light curves downloaded')
     if not files:
-        sys.exit('no light curves found at MAST for this star')
+        sys.exit(f'No TESS, K2 or Kepler light curves of TIC {tic} were found at MAST. Check the number (the TIC '
+                 'number, not a TOI or HD number); stars that TESS has not observed at 2-minute or full-frame '
+                 'cadence have none.')
 
     # 2. search every light curve
     con = hunt.db(out / 'run.db')
