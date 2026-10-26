@@ -8,6 +8,13 @@ import numpy as np
 
 B = paths.BIN
 ROOT = paths.HOME
+def roche_ratio(R, M, P):
+    """Host radius / Roche-lobe radius of a twin-mass orbit: a from Kepler's third law with total mass 2 M (Msun, d, Rsun),
+    lobe 0.38 a (Eggleton 1983: 0.379 a at q = 1)."""
+    a = ((2 * (M if M == M else 1.0)) * (P / 365.25) ** 2) ** (1 / 3) * 215.03
+    return R / (0.38 * a)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     for tic in [int(x) for x in argv]:
@@ -21,8 +28,7 @@ def main(argv=None):
         P = e['period']; R = st.get('rad'); M = st.get('mass') or 1.0
         roche = None
         if R and R == R:
-            a = ((2 * (M if M == M else 1.0)) * (P / 365.25) ** 2) ** (1 / 3) * 215.03
-            roche = R / (0.38 * a)
+            roche = roche_ratio(R, M, P)
         sec = e.get('secondary') or {}
         cen = max((c['sigma'] for c in e.get('centroid', []) if c['unit'] < 99 or c['unit'] > 1000), default=0)
         print(f"{tic} T{st['tmag']:.2f} Teff {st.get('teff')} R {R if R == R else '-'} | P {P:.5f} dbl {e['doubled']} "

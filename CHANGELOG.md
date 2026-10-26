@@ -12,6 +12,9 @@
 - `gaia_checks` takes the source with the TIC's Gaia identifier as the target of the RUWE, eclipsing-binary, and blend checks, and the nearest source only when the TIC has none; before, a faint neighbour nearer to the catalogue position could be taken for the star.
 - Offline tests of the stellar-radius, V-shape, step, depth-change, density, and pulsator cuts, the Gaia checks (mocked archive), the stitching and BLS limits, the common-mode flag, the pixel model, and the light-travel-time fit (`docs/MODEL_AUDIT.md`).
 
+- The planet radius uses the TIC contamination ratio c (depth_true = depth_obs (1 + c); Stassun et al. 2019); `summary.json` and `report.md` give the corrected radius (`rp_earth`) and the one without the correction (`rp_earth_uncorrected`), and `report.md` is written as UTF-8 (before, the system code page made the title unreadable on Windows).
+- Offline tests of the Gaia match radius, the generalised-Gaussian eclipse fit, e cos w and e sin w, the Roche ratio of the triage (now `triage.roche_ratio`), the box durations and the false-alarm level.
+
 - `occulta planets vet TIC` now vets a star that the survey has not promoted; before, every dip was dropped for want of a candidate depth and the star was always rejected.
 - Centroid shifts of Kepler and K2 data are converted with the Kepler pixel (3.98 arcsec) instead of the TESS pixel (21 arcsec), which had overstated them by a factor of 5.3.
 - `occulta binaries lighttime` and `occulta binaries lighttime-scan` no longer stop with a NameError.

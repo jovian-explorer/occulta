@@ -357,7 +357,11 @@ def vet(con, tic, findings):
         # ---- physical parameters
         ra, dec, tmag, teff, rad, mass, dist, gaia, contr = star if star else [None] * 9
         rad = rad or np.nan; mass = mass or np.nan
-        rp = np.sqrt(dep) * rad * RSUN / REARTH
+        # the TIC contamination ratio c = (flux of the neighbours) / (flux of the target) dilutes the transit, so that
+        # depth_true = depth_obs (1 + c) (Stassun et al. 2019); a missing or negative ratio counts as no dilution
+        c_ = contr if contr is not None and np.isfinite(contr) and contr > 0 else 0.0
+        rp_obs = np.sqrt(dep) * rad * RSUN / REARTH
+        rp = np.sqrt(dep * (1 + c_)) * rad * RSUN / REARTH
         a_au = ((mass * (P / 365.25) ** 2) ** (1 / 3)) if np.isfinite(mass) else np.nan
         rho_star = mass * MSUN / (4 / 3 * np.pi * (rad * RSUN) ** 3) / 1000 if np.isfinite(rad) else np.nan  # g/cc
         k = np.sqrt(dep)
@@ -458,7 +462,7 @@ def vet(con, tic, findings):
 
         summary = {'tic': tic, 'status': status, 'reasons': reasons, 'notes': notes, 'period_d': P,
                    't0_bjd': t0 + BTJD, 'depth_ppm': dep * 1e6, 't14_h': t14 * 24, 'ingress_frac': shape,
-                   'snr': snr, 'n_transits_seen': len(tr), 'sectors': sorted(main), 'rp_earth': rp, 'a_au': a_au,
+                   'snr': snr, 'n_transits_seen': len(tr), 'sectors': sorted(main), 'rp_earth': rp, 'rp_earth_uncorrected': rp_obs, 'a_au': a_au,
                    'teq_k': teq, 'rho_star': rho_star, 'rho_transit_b0': rho_transit, 'odd_even_sigma': oe_sig,
                    'secondary_sigma': sec_sig, 'gaia': gaia_res,
                    'epochs': [{'epoch': n, 'depth_ppm': d * 1e6, 'err_ppm': e * 1e6} for n, d, e in epochs],
@@ -467,7 +471,7 @@ def vet(con, tic, findings):
                    'matched_dips': [{'sector': e[0], 't0_btjd': e[1], 'depth_ppm': e[2], 'snr': e[3]} for e in events],
                    'surviving_periods': [a[0] for a in alive], 'vetted': time.strftime('%Y-%m-%d %H:%M')}
         (outdir / 'summary.json').write_text(json.dumps(summary, indent=1, default=float))
-        (outdir / 'report.md').write_text(report_md(summary))
+        (outdir / 'report.md').write_text(report_md(summary), encoding='utf-8')
         con.execute('UPDATE candidate SET status=?, period=?, t0=?, depth_ppm=?, dur_h=?, snr=?, score=?, notes=?, updated=? '
                     'WHERE tic=?', (status, P, t0, dep * 1e6, t14 * 24, snr, score,
                                     '; '.join(reasons + notes), time.strftime('%Y-%m-%d %H:%M'), tic))
@@ -476,12 +480,12 @@ def vet(con, tic, findings):
         con.execute("UPDATE candidate SET status='vet_error', notes=?, updated=? WHERE tic=?",
                     (str(e), time.strftime('%Y-%m-%d %H:%M'), tic))
         con.commit()
-        (outdir / 'report.md').write_text(f'# TIC {tic}\n\nNot vetted: {e}\n')
+        (outdir / 'report.md').write_text(f'# TIC {tic}\n\nNot vetted: {e}\n', encoding='utf-8')
     except RuntimeError as e:
         con.execute("UPDATE candidate SET status='rejected', notes=?, updated=? WHERE tic=?",
                     (str(e), time.strftime('%Y-%m-%d %H:%M'), tic))
         con.commit()
-        (outdir / 'report.md').write_text(f'# TIC {tic}\n\nRejected during vetting: {e}\n')
+        (outdir / 'report.md').write_text(f'# TIC {tic}\n\nRejected during vetting: {e}\n', encoding='utf-8')
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -494,7 +498,7 @@ def report_md(s):
          f"{', '.join(map(str, s['sectors']))}.", '',
          f"Host: Tmag {st['tmag']}, Teff {st['teff']} K, R {st['rad']} Rsun, M {st['mass']} Msun, d {st['dist_pc']} pc, "
          f"TIC contamination ratio {st['contratio']}.", '',
-         f"Planet: Rp {s['rp_earth']:.2f} Re, a {s['a_au']:.4f} AU, Teq {s['teq_k']:.0f} K.", '',
+         f"Planet: Rp {s['rp_earth']:.2f} Re after the dilution correction ({s['rp_earth_uncorrected']:.2f} Re without it), a {s['a_au']:.4f} AU, Teq {s['teq_k']:.0f} K.", '',
          f"Tests: ingress fraction {s['ingress_frac']:.2f}, odd/even {s['odd_even_sigma']:.1f} sigma, "
          f"secondary {s['secondary_sigma']:.1f} sigma, stellar density from TIC {s['rho_star']:.2f} g/cc versus "
          f"{s['rho_transit_b0']:.2f} g/cc from the transit (central-transit assumption).", '',
