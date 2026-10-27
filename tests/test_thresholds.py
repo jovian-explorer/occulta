@@ -165,3 +165,18 @@ def test_period_refit_with_the_doubled_period_off_by_2e4(tmp_path, monkeypatch):
 def test_refine_period_is_a_fixed_small_scan():
     from occulta import planets
     assert planets.REFINE_TRIALS <= 100
+
+
+def test_faint_planet_with_shallow_single_transits_is_not_absent(tmp_path, monkeypatch):
+    """LHS 3844 b case: per-transit S/N is below the dip-detection limit and the candidate depth is the (biased) depth of
+    the strongest dips; predicted epochs without a detected dip must not reject the period."""
+    status, period, notes = _vet_synthetic(tmp_path, monkeypatch, STARTS, 0.9, 1000.4, 1500e-6, 1.2 / 24,
+                                           noise=1500e-6, cand=(0.9, 1000.4, 1.2, 3500))
+    assert status == 'ready' and abs(period - 0.9) < 0.005, (status, period, notes)
+
+
+def test_wrong_period_on_a_bright_star_with_flat_epochs_is_rejected(tmp_path, monkeypatch):
+    """True period 1.2 d, claimed 1.8 d: the in-between predicted epochs are flat and well measured."""
+    status, _, notes = _vet_synthetic(tmp_path, monkeypatch, STARTS, 1.2, 1000.4, 2500e-6, 2 / 24,
+                                      cand=(1.8, 1000.4, 2.0, 2500))
+    assert status == 'rejected' and 'absent in covered data' in notes, (status, notes)

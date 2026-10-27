@@ -24,7 +24,9 @@ MAX_PAIR_DIPS = 25     # only the strongest dips propose periods
 MAX_PANELS = 24       # individual transits drawn in transits.png
 P_HALF_MIN = 0.2       # shortest P/2 trialled for a BLS period (d); the BLS grid starts at 0.5 d, so true periods below that appear only doubled
 REFINE_SPAN, REFINE_TRIALS = 12.0, 97   # BLS period refit: +-12 steps of P dur / B, 4 trials per step, 9 epochs each (873 folds)
-HALF_ODD_EVEN_SIGMA = 3.0   # P/2 is kept only if its two parities agree in depth within this many sigma
+DETECT_SNR = 7.0            # per-transit S/N of the candidate depth needed before an undetected epoch counts as absent
+STACK_SNR = 3.0             # the stack of all covered epochs of a period must show the transit at this S/N
+HALF_ODD_EVEN_SIGMA = 3.0  # P/2 is kept only if its two parities agree in depth within this many sigma
 VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
 
 
@@ -310,9 +312,15 @@ def vet(con, tic, findings):
                 seen += 1
                 sw += 1 / e ** 2; sdw += d / e ** 2
                 par[int(round((tc - t0) / P)) % 2].append((d, e))
-                # a predicted transit is missing only if no dip is seen at all and the expected one would be obvious
-                if d / e < 2 and (exp - d) / e > 4:
+                # a predicted transit is missing only if no dip is seen at all, the expected one would be obvious, and the
+                # data are good enough to have detected it on its own (per-transit S/N of the candidate depth above the
+                # dip-detection threshold); on a faint star single transits are below that limit and cannot be absent
+                if exp / e >= DETECT_SNR and d / e < 2 and (exp - d) / e > 4:
                     ok = False; misses.append(round(tc, 3)); break
+            if ok and sw > 0 and sdw / np.sqrt(sw) < STACK_SNR:
+                # faint star: no single epoch is decisive, but the stack of all covered epochs shows no transit at all
+                # (the candidate depth is no yardstick here: it is set by the strongest, noise-boosted dips)
+                ok = False; misses.append('stack flat')
             if ok and is_half and min(len(v) for v in par.values()) >= 1:
                 # P/2 must be one planet: the in-between epochs show a depth consistent with the others
                 (d0, e0), (d1, e1) = [(np.average([d for d, _ in v], weights=[1 / e ** 2 for _, e in v]),
@@ -428,12 +436,15 @@ def vet(con, tic, findings):
         steps = sum(st > 0.5 * dep and st > 3 * se for _, _, _, st, se in epochs)
         if epochs and steps >= max(1, len(epochs) / 2):
             reasons.append(f'baseline differs before and after the dip in {steps} of {len(epochs)} epochs: a step or ramp, not a transit')
+        # only epochs whose own data could show the fitted depth (per-transit S/N >= DETECT_SNR) can be judged alone; on a
+        # faint star the stack (folded S/N above) carries the evidence instead
         epochs = [x[:3] for x in epochs]
-        clear = [(n, d, e) for n, d, e in epochs if d / e >= 5 and 0.4 < d / dep < 2.5]
-        if len(epochs) >= 2 and len(clear) < 2:
-            reasons.append(f'only {len(clear)} of {len(epochs)} fully covered epochs show the transit on its own')
-        elif epochs and sum(d / e >= 3 for _, d, e in epochs) < 0.6 * len(epochs):
-            reasons.append(f'transit absent in {sum(d / e < 3 for _, d, e in epochs)} of {len(epochs)} fully covered epochs')
+        powered = [x for x in epochs if dep / x[2] >= DETECT_SNR]
+        clear = [(n, d, e) for n, d, e in powered if d / e >= 5 and 0.4 < d / dep < 2.5]
+        if len(powered) >= 2 and len(clear) < 2:
+            reasons.append(f'only {len(clear)} of {len(powered)} fully covered epochs show the transit on its own')
+        elif powered and sum(d / e >= 3 for _, d, e in powered) < 0.6 * len(powered):
+            reasons.append(f'transit absent in {sum(d / e < 3 for _, d, e in powered)} of {len(powered)} fully covered epochs')
         if len(clear) >= 2:
             d_ = np.array([d for _, d, _ in clear]); e_ = np.array([e for _, _, e in clear])
             m_ = np.sum(d_ / e_ ** 2) / np.sum(1 / e_ ** 2)
