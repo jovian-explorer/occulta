@@ -46,6 +46,7 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 |---|---|---|---|---|
 | QLP flux column | `read_lc`, l. 35 | `SYS_RM_FLUX`, else `SAP_FLUX` (not the high-passed `KSPSAP_FLUX`) | Huang et al. 2020a, b; Kunimoto et al. 2021 | sourced |
 | SPOC and Kepler flux | l. 47 | PDCSAP, quality flag 0 | Smith et al. 2012; Stumpe et al. 2012; Jenkins et al. 2016 | sourced |
+| TESS-SPOC FFI flux | `read_lc`, same branch as SPOC | PDCSAP, quality flag 0; units 4000 + sector; opt-in plan step | Caldwell et al. 2020; Jenkins et al. 2016 | sourced; tests/test_tess_spoc.py |
 | K2 flux | l. 41 | K2SFF `FCOR`, thruster firings (`MOVING`) dropped | Vanderburg & Johnson 2014 | sourced |
 | Kepler/K2 time to BTJD | l. 24 | BKJD + 2454833 − 2457000 | mission definitions of BKJD and BTJD | sourced |
 | Detrending | `detrend`, l. 65-80 | running median of 2 d per segment, segments split at gaps > 0.5 d, upward outliers > 4 MAD removed | choice | tested: `test_detrend_removes_a_slow_trend_and_keeps_the_dip`, `test_detrend_works_per_segment_across_a_gap_and_clips_only_upward_outliers` |

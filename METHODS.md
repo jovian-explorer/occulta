@@ -12,6 +12,7 @@ The search uses four sets of light curves, all obtained from the Mikulski Archiv
 
 1. TESS FFI light curves from the MIT Quick-Look Pipeline (QLP; Huang et al. 2020a, 2020b; Kunimoto et al. 2021). We use the systematics-corrected aperture flux (`SYS_RM_FLUX`, or `SAP_FLUX` where the former is absent), since the QLP detrended flux (`KSPSAP_FLUX`) is high-pass filtered and erodes transits longer than a few hours. QLP Sectors 99-104 have not yet been redelivered with corrected timestamps (MAST QLP documentation), and mid-times derived from them are treated as provisional; on stable eclipsing binaries we measure their eclipse times to agree with earlier ephemerides within 2 min in Sectors 99-100 and within about 7 min in Sectors 101-104.
 2. TESS 2-minute and 200-second light curves from the Science Processing Operations Center (SPOC; Jenkins et al. 2016), using the Presearch Data Conditioning flux (PDCSAP; Smith et al. 2012; Stumpe et al. 2012).
+   2b. Optionally, TESS-SPOC full-frame-image light curves (1800, 600, or 200 s; up to about 160,000 stars per sector; Caldwell et al. 2020), made by the same pipeline and read with the same PDCSAP flux and quality flag 0. They are searched only when the plan in `config.json` contains the TESS-SPOC step.
 3. K2 light curves corrected for the spacecraft roll by the K2SFF method (Vanderburg & Johnson 2014), using the best-aperture corrected flux.
 4. Kepler long-cadence light curves, quarters 0-17, using PDCSAP flux.
 

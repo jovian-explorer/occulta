@@ -4,7 +4,7 @@ how star identifiers are encoded.
 Star ids are integers in one namespace: TESS stars keep their TIC number, K2 stars are
 2e10 + EPIC, Kepler stars are 3e10 + KIC. Units (one sector, campaign or quarter) are
 integer codes: QLP sector s -> s, SPOC sector s -> 1000 + s, K2 campaign c -> 2000 + c,
-Kepler quarter file q -> 3000 + q. All times are stored as BTJD (BJD - 2457000).
+Kepler quarter file q -> 3000 + q, TESS-SPOC full-frame light curves of sector s -> 4000 + s. All times are stored as BTJD (BJD - 2457000).
 """
 import io, re
 import numpy as np
@@ -18,6 +18,9 @@ QLP_URL = ('https://mast.stsci.edu/api/v0.1/Download/file/?uri=mast:HLSP/qlp/s{s
 QLP_TARGETS = 'https://archive.stsci.edu/hlsps/qlp/target_lists/s{s:04d}.csv'
 SPOC_SCRIPT = 'https://archive.stsci.edu/missions/tess/download_scripts/sector/tesscurl_sector_{s}_lc.sh'
 K2SFF_SCRIPT = 'https://archive.stsci.edu/hlsps/k2sff/download_scripts/hlsp_k2sff_k2_lightcurve_c{c:02d}_kepler_v1_bulk-dl-llc.sh'
+TESS_SPOC_URL = ('https://mast.stsci.edu/api/v0.1/Download/file/?uri=mast:HLSP/tess-spoc/s{s:04d}/target/{a}/{b}/{c}/{d}/'
+                 'hlsp_tess-spoc_tess_phot_{tic:016d}-s{s:04d}_tess_v1_lc.fits')
+TESS_SPOC_TARGETS = 'https://archive.stsci.edu/hlsps/tess-spoc/target_lists/s{s:04d}.csv'
 KEPLER_URL = 'https://archive.stsci.edu/missions/kepler/lightcurves/{k4}/{k9}/kplr{k9}-{ts}_llc.fits'
 # long-cadence file stamps, Q0 .. Q17 (Q4 is split in two)
 KEPLER_STAMPS = ['2009131105131', '2009166043257', '2009259160929', '2009350155506', '2010009091648',
@@ -38,6 +41,7 @@ def name_of(sid):
 
 
 def unit_name(u):
+    if u >= 4000: return f'TESS S{u - 4000} FFI SPOC'
     if u >= 3000: return f'Kepler file {u - 3000}'
     if u >= 2000: return f'K2 C{u - 2000}'
     if u >= 1000: return f'TESS S{u - 1000} 2-min'
@@ -45,7 +49,7 @@ def unit_name(u):
 
 
 def fmt_of_unit(u):
-    return 'kepler' if u >= 3000 else 'k2sff' if u >= 2000 else 'spoc' if u >= 1000 else 'qlp'
+    return 'spoc' if u >= 4000 else 'kepler' if u >= 3000 else 'k2sff' if u >= 2000 else 'spoc' if u >= 1000 else 'qlp'
 
 
 def units(mission):
@@ -53,6 +57,8 @@ def units(mission):
         return QLP_SECTORS
     if mission == 'SPOC':
         return [1000 + s for s in QLP_SECTORS]
+    if mission == 'TESS-SPOC':
+        return [4000 + s for s in QLP_SECTORS]
     if mission == 'K2':
         return [2000 + c for c in K2_CAMPAIGNS]
     if mission == 'Kepler':
@@ -75,16 +81,16 @@ def _script_urls(url, pattern):
 
 def unit_targets(u, kepler_ids=None):
     """{star id: url or None} for every star with a light curve in this unit (None = build from template)."""
-    if u < 1000:
-        r = requests.get(QLP_TARGETS.format(s=u), timeout=900)
+    if u < 1000 or u >= 4000:
+        r = requests.get((QLP_TARGETS if u < 1000 else TESS_SPOC_TARGETS).format(s=u % 1000 if u >= 4000 else u), timeout=900)
         if r.status_code != 200:
             return None
         ids = np.loadtxt(io.StringIO(r.text), delimiter=',', skiprows=1, usecols=0, dtype=np.int64, ndmin=1)
         return {int(i): None for i in ids}
-    if u < 2000:
+    if 1000 <= u < 2000:
         d = _script_urls(SPOC_SCRIPT.format(s=u - 1000), r'-s\d{4}-(\d{16})-')
         return None if d is None else {int(k): v for k, v in d.items()}
-    if u < 3000:
+    if 2000 <= u < 3000:
         d = _script_urls(K2SFF_SCRIPT.format(c=u - 2000), r'lightcurve_(\d+)-c\d+_kepler')
         return None if d is None else {K2_OFF + k: v for k, v in d.items()}
     # Kepler: every catalogued target is tried; quarters it was not observed in return 404
@@ -95,6 +101,9 @@ def url_for(u, sid, versions=('v01', 'v02')):
     if u < 1000:
         z = f'{sid:016d}'
         return [QLP_URL.format(s=u, a=z[:4], b=z[4:8], c=z[8:12], d=z[12:], tic=sid, v=v) for v in versions]
+    if u >= 4000:
+        z = f'{sid:016d}'
+        return [TESS_SPOC_URL.format(s=u - 4000, a=z[:4], b=z[4:8], c=z[8:12], d=z[12:], tic=sid)]
     if u >= 3000:
         k9 = f'{sid - KEP_OFF:09d}'
         return [KEPLER_URL.format(k4=k9[:4], k9=k9, ts=KEPLER_STAMPS[u - 3000])]

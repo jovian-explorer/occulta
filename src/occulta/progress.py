@@ -94,7 +94,7 @@ def main(refresh_totals=False):
     # 0 not applicable, 1 planned, 2 queued (pending), 3 running, 4 done
     grid = np.zeros((len(steps), NS), int)
     for i, p in enumerate(plan):
-        if p['mission'] in ('QLP', 'SPOC'):
+        if p['mission'] in ('QLP', 'SPOC', 'TESS-SPOC'):
             grid[i, :] = 1
         elif p['mission'] == 'K2':
             grid[i, :] = 0

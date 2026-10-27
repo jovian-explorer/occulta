@@ -71,7 +71,7 @@ def main(argv=None):
     # 2. search every light curve
     con = hunt.db(out / 'run.db')
     for author, unit, path in files:
-        u = unit if author in ('QLP',) else (1000 + unit if author in ('SPOC', 'TESS-SPOC') else unit)
+        u = unit if author in ('QLP',) else (1000 + unit if author == 'SPOC' else 4000 + unit if author == 'TESS-SPOC' else unit)
         con.execute('INSERT OR IGNORE INTO target(sector, tic, status) VALUES (?,?,0)', (u, tic))
         res = lcsearch.process(path, tic, u, vet.AUTHORS[author], do_bls=author != 'Kepler')
         hunt.store(con, res)
