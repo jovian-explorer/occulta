@@ -53,7 +53,7 @@ def load(tic):
             if t.size < 100:
                 continue
             o = np.argsort(t)
-            u = unit + (1000 if author in ('SPOC', 'TESS-SPOC') else 0)
+            u = unit + {'SPOC': 1000, 'TESS-SPOC': 4000}.get(author, 0)
             parts.append((t[o], f[o], np.full(t.size, u), cx[o], cy[o]))
     finally:
         shutil.rmtree(wd, ignore_errors=True)

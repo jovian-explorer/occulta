@@ -23,6 +23,7 @@ P_MIN = 0.5            # shortest period proposed from a pair of dips (d)
 MAX_PAIR_DIPS = 25     # only the strongest dips propose periods
 MAX_PANELS = 24       # individual transits drawn in transits.png
 P_HALF_MIN = 0.2       # shortest P/2 trialled for a BLS period (d); the BLS grid starts at 0.5 d, so true periods below that appear only doubled
+REFINE_SPAN, REFINE_TRIALS = 12.0, 97   # BLS period refit: +-12 steps of P dur / B, 4 trials per step, 9 epochs each (873 folds)
 HALF_ODD_EVEN_SIGMA = 3.0   # P/2 is kept only if its two parities agree in depth within this many sigma
 VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
 
@@ -138,6 +139,28 @@ def coverage(t, tc, dur_d):
     return min(1.0, n * dt / dur_d)
 
 
+def refine_period(T, Y, P, T0, dur_d):
+    """Scan a narrow grid of periods around a BLS period and keep the one whose folded light curve is deepest in transit.
+    Over a baseline B a period error dP moves the last transit by (B/P) dP, so the grid spans +-REFINE_SPAN steps of
+    P dur / B (one transit duration over the baseline) and is sampled at a quarter of that step, with nine epoch shifts of up to 0.75 durations. The fold is
+    anchored at the middle of the data, so that the error is shared between both ends. Returns (P, t0)."""
+    B = T[-1] - T[0]
+    if B < 20 * P:
+        return P, T0
+    tm = T0 + np.round((0.5 * (T[0] + T[-1]) - T0) / P) * P
+    res = P * dur_d / B
+    Ps = P + res * np.linspace(-REFINE_SPAN, REFINE_SPAN, REFINE_TRIALS)
+    base = np.median(Y)
+    best = (-np.inf, P, tm)
+    for q in Ps:
+        for dt in dur_d * np.linspace(-0.75, 0.75, 9):      # the epoch moves together with the period
+            x = ((T - tm - dt) / q + 0.5) % 1 - 0.5
+            inn = np.abs(x * q) < 0.35 * dur_d
+            if inn.sum() >= 3 and base - np.mean(Y[inn]) > best[0]:
+                best = (base - np.mean(Y[inn]), float(q), float(tm + dt))
+    return best[1], best[2]
+
+
 def gaia_checks(ra, dec, gaia_id, depth):
     out = {}
     try:
@@ -221,14 +244,18 @@ def vet(con, tic, findings):
                 raise VetTimeout(f'period search stopped after {VET_LIMIT_S} s ({len(events)} dips); vet by hand')
         ranked, halved = [], None
         if kind == 'bls' and P0:
-            sup = [e for e in events if abs((((e[1] - T0) / P0 + 0.5) % 1 - 0.5) * P0) < tol]
-            if len(sup) < 2:   # individual dips below the single-event threshold: trust the BLS ephemeris
-                sup = [(None, T0, depth_ppm, snr0, dur_h, '')]
-            ranked = [(P0, sup)]
+            # a BLS period error of 1e-4 d smears the stacked dips over a multi-year baseline: refit it before the epoch test
+            Pr, Tr = refine_period(T, Y, P0, T0, dur_d)
+            on = lambda ev, P_, T_: [e for e in ev if abs((((e[1] - T_) / P_ + 0.5) % 1 - 0.5) * P_) < tol]
+            sup = on(events, Pr, Tr)
+            if len(sup) < 2:
+                sup = [(None, Tr, depth_ppm, snr0, dur_h, '')]
+            ranked = [(Pr, sup)]
             if P0 / 2 >= P_HALF_MIN:     # BLS often locks on 2 x P for short, faint planets: P/2 competes with P
-                half = [e for e in events if abs((((e[1] - T0) / (P0 / 2) + 0.5) % 1 - 0.5) * P0 / 2) < tol]
-                ranked.append((P0 / 2, half if len(half) >= 2 else sup))
-                halved = P0 / 2
+                Ph, Th = refine_period(T, Y, P0 / 2, T0, dur_d)
+                half = on(events, Ph, Th)
+                ranked.append((Ph, half if len(half) >= 2 else [(None, Th, depth_ppm, snr0, dur_h, '')]))
+                halved = Ph
         else:
             # the strongest clean dips only; for each pair, every period gap/n down to P_MIN is tested on all of them
             # at once, so that dips spread over years cost seconds, not hours

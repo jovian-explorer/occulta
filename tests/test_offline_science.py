@@ -146,3 +146,14 @@ def test_rerun_divide_analyses_at_a_fraction_of_the_period(tmp_path, monkeypatch
     rerun, called = _eb_home(tmp_path, monkeypatch)
     rerun.main(['--divide', '2', '12'])
     assert called == [(12, 2.0, 12.0)]         # the width is limited to a quarter of the shorter period
+
+
+def test_binary_analysis_stores_tess_spoc_as_4000_plus_sector(tmp_path, monkeypatch):
+    from occulta.binaries import analysis
+    from occulta import planets as vet
+    t = np.arange(1000, 1010, 10 / 1440)
+    monkeypatch.setattr(analysis, 'WORK', tmp_path / 'w'); monkeypatch.setattr(analysis, 'OUT', tmp_path)
+    monkeypatch.setattr(vet, 'fetch_all', lambda tic, wd: [('TESS-SPOC', 14, 'x'), ('SPOC', 14, 'y')])
+    monkeypatch.setattr(analysis.lcsearch, 'read_lc', lambda p, f: (t, np.ones(t.size), None, np.zeros(t.size), np.zeros(t.size), None))
+    u = np.unique(analysis.load(9)[2])
+    assert list(u) == [1014, 4014], u

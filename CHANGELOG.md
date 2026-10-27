@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Planet vetting refits the BLS period before the epoch test: a fixed grid of 97 periods (+-12 steps of P dur / B, B the baseline) times 9 epoch shifts around P and P/2 is folded, and the deepest stack is kept, so a BLS period error of about 1e-4 d no longer smears the dips over a multi-year baseline (LHS 3844 b). The binary-star analysis now stores TESS-SPOC as unit 4000 + sector, as the survey does.
 - New optional source: TESS-SPOC full-frame-image light curves (MAST HLSP tess-spoc; Caldwell et al. 2020), units 4001 and up, per-sector target lists from archive.stsci.edu/hlsps/tess-spoc/target_lists, PDCSAP flux with quality flag 0. It is searched only when `{"mission": "TESS-SPOC"}` is added to `plan` in `config.json`; the default plan is unchanged. `occulta reproduce` now stores TESS-SPOC light curves as unit 4000 + sector instead of sharing the unit of the 2-minute SPOC data.
 - `occulta survey map` shades the sky by the number of TESS sectors per position (grey scale), outlines the 20 K2 campaign fields and the Kepler field, and prints the MAST light-curve totals per product. The shading needs the optional package tess-point (`pip install tess-point`, or `pip install ".[map]"`); without it the map is drawn without shading. The footprint (20,000 positions, about 7 min of CPU) is computed once and cached as `data/footprint.npz` in the working directory.
 - `occulta survey map` also works on a working directory where `survey status` has not been run yet.

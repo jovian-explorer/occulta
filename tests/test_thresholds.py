@@ -142,3 +142,26 @@ def test_vetting_does_not_halve_alternating_depths(tmp_path, monkeypatch):
 def test_vetting_keeps_the_true_bls_period(tmp_path, monkeypatch):
     status, period, notes = _vet(tmp_path, monkeypatch, cand=(7.13, 1003.2, 3.0, 2500))
     assert status == 'ready' and abs(period - 7.13) < 0.01, (status, period, notes)
+
+
+LONG = (1000.0, 1700.0, 2400.0, 3000.0)      # four sectors over a 2,000 d baseline
+
+
+def test_period_refit_recovers_a_bls_period_that_is_1e4_off(tmp_path, monkeypatch):
+    """A BLS period 1e-4 d too long moves the last transit by about 0.17 d over 2,000 d; the refit brings it back."""
+    from occulta import planets
+    status, period, notes = _vet_synthetic(tmp_path, monkeypatch, LONG, 1.2, 1000.4, 1500e-6, 2 / 24,
+                                           noise=1200e-6, cand=(1.2001, 1000.4, 2.0, 1500))
+    assert status == 'ready' and abs(period - 1.2) < 2e-5, (status, period, notes)
+
+
+def test_period_refit_with_the_doubled_period_off_by_2e4(tmp_path, monkeypatch):
+    """LHS 3844 b case: BLS gives 2 x P with an error of 2e-4 d; P/2 is still adopted and exact."""
+    status, period, notes = _vet_synthetic(tmp_path, monkeypatch, LONG, 1.2, 1000.4, 1500e-6, 2 / 24,
+                                           noise=1200e-6, cand=(2.4002, 1000.4, 2.0, 1500))
+    assert status == 'ready' and abs(period - 1.2) < 2e-5, (status, period, notes)
+
+
+def test_refine_period_is_a_fixed_small_scan():
+    from occulta import planets
+    assert planets.REFINE_TRIALS <= 100
