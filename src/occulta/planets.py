@@ -22,6 +22,8 @@ AUTHORS = {'QLP': 'qlp', 'SPOC': 'spoc', 'TESS-SPOC': 'spoc', 'Kepler': 'kepler'
 P_MIN = 0.5            # shortest period proposed from a pair of dips (d)
 MAX_PAIR_DIPS = 25     # only the strongest dips propose periods
 MAX_PANELS = 24       # individual transits drawn in transits.png
+P_HALF_MIN = 0.2       # shortest P/2 trialled for a BLS period (d); the BLS grid starts at 0.5 d, so true periods below that appear only doubled
+HALF_ODD_EVEN_SIGMA = 3.0   # P/2 is kept only if its two parities agree in depth within this many sigma
 VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
 
 
@@ -217,12 +219,16 @@ def vet(con, tic, findings):
         def check_time():
             if time.monotonic() - start > VET_LIMIT_S:
                 raise VetTimeout(f'period search stopped after {VET_LIMIT_S} s ({len(events)} dips); vet by hand')
-        ranked = []
+        ranked, halved = [], None
         if kind == 'bls' and P0:
             sup = [e for e in events if abs((((e[1] - T0) / P0 + 0.5) % 1 - 0.5) * P0) < tol]
             if len(sup) < 2:   # individual dips below the single-event threshold: trust the BLS ephemeris
                 sup = [(None, T0, depth_ppm, snr0, dur_h, '')]
             ranked = [(P0, sup)]
+            if P0 / 2 >= P_HALF_MIN:     # BLS often locks on 2 x P for short, faint planets: P/2 competes with P
+                half = [e for e in events if abs((((e[1] - T0) / (P0 / 2) + 0.5) % 1 - 0.5) * P0 / 2) < tol]
+                ranked.append((P0 / 2, half if len(half) >= 2 else sup))
+                halved = P0 / 2
         else:
             # the strongest clean dips only; for each pair, every period gap/n down to P_MIN is tested on all of them
             # at once, so that dips spread over years cost seconds, not hours
@@ -259,12 +265,14 @@ def vet(con, tic, findings):
         dt_T = np.median(np.diff(T[:2000]))
         for P, sup in ranked:
             check_time()
+            is_half = P == halved
             tt = np.array(sorted(e[1] for e in sup))
             ep = np.round((tt - tt[0]) / P)
             P, t0 = np.polyfit(ep, tt, 1) if np.ptp(ep) > 0 else (P, tt[0])
             exp = float(np.median([e[2] for e in sup])) / 1e6
             n0, n1 = int(np.floor((T[0] - t0) / P)) - 1, int(np.ceil((T[-1] - t0) / P)) + 1
             ok, seen, misses, sw, sdw = True, 0, [], 0.0, 0.0
+            par = {0: [], 1: []}
             tcs = t0 + np.arange(n0, n1 + 1) * P
             cov = (np.searchsorted(T, tcs + dur_d / 2) - np.searchsorted(T, tcs - dur_d / 2)) * dt_T / dur_d  # coverage()
             for tc in tcs[cov >= 0.6]:
@@ -274,9 +282,16 @@ def vet(con, tic, findings):
                 d, e, _ = bd
                 seen += 1
                 sw += 1 / e ** 2; sdw += d / e ** 2
+                par[int(round((tc - t0) / P)) % 2].append((d, e))
                 # a predicted transit is missing only if no dip is seen at all and the expected one would be obvious
                 if d / e < 2 and (exp - d) / e > 4:
                     ok = False; misses.append(round(tc, 3)); break
+            if ok and is_half and min(len(v) for v in par.values()) >= 1:
+                # P/2 must be one planet: the in-between epochs show a depth consistent with the others
+                (d0, e0), (d1, e1) = [(np.average([d for d, _ in v], weights=[1 / e ** 2 for _, e in v]),
+                                       1 / np.sqrt(sum(1 / e ** 2 for _, e in v))) for v in par.values()]
+                if abs(d0 - d1) / np.hypot(e0, e1) > HALF_ODD_EVEN_SIGMA:
+                    ok = False; misses.append('P/2 depths differ')
             tried.append((round(P, 4), len(sup), seen, misses))
             if ok:
                 alive.append((P, t0, seen, sdw / np.sqrt(sw) if sw else 0.0, exp))

@@ -122,3 +122,23 @@ def test_vetting_rejects_alternating_depths(tmp_path, monkeypatch):
 def test_vetting_rejects_a_signal_with_fewer_than_two_detectable_dips(tmp_path, monkeypatch):
     status, _, notes = _vet(tmp_path, monkeypatch, depth=300e-6)      # below the single-event threshold
     assert status == 'rejected' and 'fewer than two consistent dips' in notes, notes
+
+
+def test_vetting_halves_a_bls_period_that_is_twice_the_true_one(tmp_path, monkeypatch):
+    """LHS 3844 b: BLS locks on 2 x P; the in-between epochs show the same depth, so P/2 is adopted."""
+    status, period, notes = _vet_synthetic(tmp_path, monkeypatch, STARTS, 1.2, 1000.4, 2500e-6, 2 / 24,
+                                           cand=(2.4, 1000.4, 2.0, 2500))
+    assert abs(period - 1.2) < 0.005, (status, period, notes)
+
+
+def test_vetting_does_not_halve_alternating_depths(tmp_path, monkeypatch):
+    """A signal of period P whose in-between epochs have half the depth (an eclipsing binary) keeps P."""
+    half = lambda t: _transits(t, 2.4, 1001.6, 1250e-6, 2 / 24)
+    status, period, notes = _vet_synthetic(tmp_path, monkeypatch, STARTS, 2.4, 1000.4, 2500e-6, 2 / 24, extra=half,
+                                           cand=(2.4, 1000.4, 2.0, 2500))
+    assert abs(period - 2.4) < 0.005, (status, period, notes)
+
+
+def test_vetting_keeps_the_true_bls_period(tmp_path, monkeypatch):
+    status, period, notes = _vet(tmp_path, monkeypatch, cand=(7.13, 1003.2, 3.0, 2500))
+    assert status == 'ready' and abs(period - 7.13) < 0.01, (status, period, notes)
