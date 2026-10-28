@@ -23,10 +23,13 @@ P_MIN = 0.5            # shortest period proposed from a pair of dips (d)
 MAX_PAIR_DIPS = 25     # only the strongest dips propose periods
 MAX_PANELS = 24       # individual transits drawn in transits.png
 P_HALF_MIN = 0.2       # shortest P/2 trialled for a BLS period (d); the BLS grid starts at 0.5 d, so true periods below that appear only doubled
-REFINE_SPAN, REFINE_TRIALS = 12.0, 97   # BLS period refit: +-12 steps of P dur / B, 4 trials per step, 9 epochs each (873 folds)
+REFINE_SPAN, REFINE_TRIALS = 30.0, 241  # BLS period refit: +-30 steps of P dur / B, 4 trials per step, 9 epochs each (2,169 folds); LHS 3844 b needed more than 12 steps
 DETECT_SNR = 7.0            # per-transit S/N of the candidate depth needed before an undetected epoch counts as absent
 STACK_SNR = 3.0             # the stack of all covered epochs of a period must show the transit at this S/N
 HALF_ODD_EVEN_SIGMA = 3.0  # P/2 is kept only if its two parities agree in depth within this many sigma
+V_MIN_CADENCES = 8.0       # the V-shape cut is used only if the transit spans this many median exposures: a rounded (limb-darkened) or timing-smeared transit of fewer cadences always fits as a V
+V_PREFER_SIGMA = 3.0       # V-shape cut: the V (ingress = half the transit) must beat a flat-bottomed transit by this many sigma (delta chi2 = sigma^2) after cadence integration
+SEC_HALF_SIGMA = 2.0       # a secondary eclipse rejects the candidate only if each half of the data (early, late) also shows it at this significance
 VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
 
 
@@ -112,6 +115,14 @@ def trapezoid(t, t0, depth, t14, t12):
     return y
 
 
+def trapezoid_ss(t, t0, depth, t14, t12, exp):
+    """Trapezoid integrated over the exposure time `exp` (supersampled), so that a transit of a few cadences is compared fairly."""
+    exp = np.broadcast_to(np.asarray(exp, float), np.shape(t))
+    off = (np.arange(5) - 2) / 5
+    y = sum(trapezoid(t + o * exp, t0, depth, t14, t12) for o in off) / len(off)
+    return np.where(exp > t14 / 40, y, trapezoid(t, t0, depth, t14, t12))
+
+
 def _win(t, y, tc, half):
     a, b = np.searchsorted(t, [tc - half, tc + half])
     return t[a:b], y[a:b]
@@ -144,23 +155,24 @@ def coverage(t, tc, dur_d):
 def refine_period(T, Y, P, T0, dur_d):
     """Scan a narrow grid of periods around a BLS period and keep the one whose folded light curve is deepest in transit.
     Over a baseline B a period error dP moves the last transit by (B/P) dP, so the grid spans +-REFINE_SPAN steps of
-    P dur / B (one transit duration over the baseline) and is sampled at a quarter of that step, with nine epoch shifts of up to 0.75 durations. The fold is
-    anchored at the middle of the data, so that the error is shared between both ends. Returns (P, t0)."""
-    B = T[-1] - T[0]
+    P dur / B (one transit duration over the baseline) and is sampled at a quarter of that step, with nine epoch shifts of up to 0.75
+    durations. The fold is anchored at the BLS epoch T0, where the BLS phase is right by construction, and B is the longest distance
+    from T0 to either end of the data. Returns (P, t0), t0 being the epoch nearest to the middle of the data."""
+    B = max(T[-1] - T0, T0 - T[0])
     if B < 20 * P:
         return P, T0
-    tm = T0 + np.round((0.5 * (T[0] + T[-1]) - T0) / P) * P
     res = P * dur_d / B
     Ps = P + res * np.linspace(-REFINE_SPAN, REFINE_SPAN, REFINE_TRIALS)
     base = np.median(Y)
-    best = (-np.inf, P, tm)
+    best = (-np.inf, P, T0)
     for q in Ps:
         for dt in dur_d * np.linspace(-0.75, 0.75, 9):      # the epoch moves together with the period
-            x = ((T - tm - dt) / q + 0.5) % 1 - 0.5
+            x = ((T - T0 - dt) / q + 0.5) % 1 - 0.5
             inn = np.abs(x * q) < 0.35 * dur_d
             if inn.sum() >= 3 and base - np.mean(Y[inn]) > best[0]:
-                best = (base - np.mean(Y[inn]), float(q), float(tm + dt))
-    return best[1], best[2]
+                best = (base - np.mean(Y[inn]), float(q), float(T0 + dt))
+    q, t0 = best[1], best[2]
+    return q, float(t0 + np.round((0.5 * (T[0] + T[-1]) - t0) / q) * q)
 
 
 def gaia_checks(ra, dec, gaia_id, depth):
@@ -222,7 +234,9 @@ def vet(con, tic, findings):
                 for s, d in data.items()}
         T = np.concatenate([v[0] for v in main.values()])
         Y = np.concatenate([v[1] for v in main.values()])
-        o = np.argsort(T); T, Y = T[o], Y[o]
+        # exposure time of every point: the median cadence of its sector (QLP is 30, 10 and 3.3 min in different sectors)
+        EXPO = np.concatenate([np.full(len(v[0]), np.median(np.diff(v[0])) if len(v[0]) > 1 else 0.0) for v in main.values()])
+        o = np.argsort(T); T, Y, EXPO = T[o], Y[o], EXPO[o]
 
         # ---- individual dips matching the candidate's depth (gap-edge and scattered-light dips excluded)
         events = []
@@ -244,7 +258,7 @@ def vet(con, tic, findings):
         def check_time():
             if time.monotonic() - start > VET_LIMIT_S:
                 raise VetTimeout(f'period search stopped after {VET_LIMIT_S} s ({len(events)} dips); vet by hand')
-        ranked, halved = [], None
+        ranked, halved, anchors = [], None, {}
         if kind == 'bls' and P0:
             # a BLS period error of 1e-4 d smears the stacked dips over a multi-year baseline: refit it before the epoch test
             Pr, Tr = refine_period(T, Y, P0, T0, dur_d)
@@ -252,12 +266,12 @@ def vet(con, tic, findings):
             sup = on(events, Pr, Tr)
             if len(sup) < 2:
                 sup = [(None, Tr, depth_ppm, snr0, dur_h, '')]
-            ranked = [(Pr, sup)]
+            ranked = [(Pr, sup)]; anchors[Pr] = Tr
             if P0 / 2 >= P_HALF_MIN:     # BLS often locks on 2 x P for short, faint planets: P/2 competes with P
                 Ph, Th = refine_period(T, Y, P0 / 2, T0, dur_d)
                 half = on(events, Ph, Th)
                 ranked.append((Ph, half if len(half) >= 2 else [(None, Th, depth_ppm, snr0, dur_h, '')]))
-                halved = Ph
+                halved = Ph; anchors[Ph] = Th
         else:
             # the strongest clean dips only; for each pair, every period gap/n down to P_MIN is tested on all of them
             # at once, so that dips spread over years cost seconds, not hours
@@ -297,7 +311,10 @@ def vet(con, tic, findings):
             is_half = P == halved
             tt = np.array(sorted(e[1] for e in sup))
             ep = np.round((tt - tt[0]) / P)
-            P, t0 = np.polyfit(ep, tt, 1) if np.ptp(ep) > 0 else (P, tt[0])
+            if P in anchors:      # the refit ephemeris is better than a line through a few matched, partly chance, dips
+                t0 = anchors[P]
+            else:
+                P, t0 = np.polyfit(ep, tt, 1) if np.ptp(ep) > 0 else (P, tt[0])
             exp = float(np.median([e[2] for e in sup])) / 1e6
             n0, n1 = int(np.floor((T[0] - t0) / P)) - 1, int(np.ceil((T[-1] - t0) / P)) + 1
             ok, seen, misses, sw, sdw = True, 0, [], 0.0, 0.0
@@ -352,11 +369,19 @@ def vet(con, tic, findings):
         lo_b = [-dur_d / 2, 0, dur_d / 4, 1e-4]
         hi_b = [dur_d / 2, 1.0, dur_d * 3, dur_d * 1.5]
         p0 = np.clip([0, depth_ppm / 1e6, dur_d, dur_d / 6], np.array(lo_b) + 1e-9, np.array(hi_b) - 1e-9)
-        fit = least_squares(lambda p: Y[w] - trapezoid(x[w], p[0], p[1], p[2], p[3]), p0, bounds=(lo_b, hi_b))
+        fit = least_squares(lambda p: Y[w] - trapezoid_ss(x[w], p[0], p[1], p[2], p[3], EXPO[w]), p0, bounds=(lo_b, hi_b))
         dt0, dep, t14, t12 = fit.x
         t0 += dt0
-        resid = Y[w] - trapezoid(x[w], dt0, dep, t14, t12)
+        resid = Y[w] - trapezoid_ss(x[w], dt0, dep, t14, t12, EXPO[w])
         sig = lcsearch.mad_std(resid)
+        # shape test: refit with the ingress fixed at a V (t12 = t14/2) and at a flat bottom (t12 = 0.1 t14), both integrated over
+        # the cadence; the V is a reason to reject only if the data prefer it over the flat bottom
+        def chi2_fixed(frac):
+            lo2, hi2 = [-dur_d / 2, 0, dur_d / 4], [dur_d / 2, 1.0, dur_d * 3]
+            q0 = np.clip([dt0, dep, t14], np.array(lo2) + 1e-9, np.array(hi2) - 1e-9)
+            f2 = least_squares(lambda q: Y[w] - trapezoid_ss(x[w], q[0], q[1], q[2], frac * q[2] / 2, EXPO[w]), q0, bounds=(lo2, hi2))
+            return np.sum(f2.fun ** 2) / sig ** 2
+        v_pref = chi2_fixed(0.2) - chi2_fixed(1.0)   # > 0: the V fits better than the flat bottom
         n_in = np.sum(np.abs(x[w] - dt0) < t14 / 2)
         snr = dep / (sig / np.sqrt(max(n_in, 1)))
         # odd / even and secondary
@@ -403,6 +428,14 @@ def vet(con, tic, findings):
                 epochs.append((int(n), bd[0], bd[1], step, step_e))
         sec, sec_e = d_at(np.ones_like(T, bool), t0 + P / 2)
         sec_sig = sec / sec_e if np.isfinite(sec) else np.nan
+        # a real secondary eclipse is in all the data; one that sits in a single subset (e.g. the provisional QLP
+        # timestamps of the newest sectors) is not: check the early and the late half separately
+        half_sig = []
+        for hm in (T < np.median(T), T >= np.median(T)):
+            hs, he = d_at(hm, t0 + P / 2)
+            if np.isfinite(hs):
+                half_sig.append(hs / he)
+        sec_consistent = not half_sig or min(half_sig) > SEC_HALF_SIGMA
 
         # ---- physical parameters
         ra, dec, tmag, teff, rad, mass, dist, gaia, contr = star if star else [None] * 9
@@ -427,9 +460,15 @@ def vet(con, tic, findings):
         if rp > 24: reasons.append(f'radius {rp:.1f} Re is stellar-size')
         if dep > 0.25: reasons.append(f'depth {dep*100:.0f}% is too deep for a planet on any main-sequence star')
         if not np.isfinite(rp) and dep > 0.05: reasons.append(f'depth {dep*100:.1f}% with no stellar radius to rule out a stellar eclipse')
-        if shape > 0.8: reasons.append(f'V-shaped (ingress fraction {shape:.2f})')
+        resolved = t14 / np.median(EXPO[w]) >= V_MIN_CADENCES
+        if shape > 0.8 and resolved and v_pref >= V_PREFER_SIGMA ** 2: reasons.append(f'V-shaped (ingress fraction {shape:.2f}, V preferred over flat bottom at {np.sqrt(v_pref):.1f} sigma)')
+        elif shape > 0.8:
+            notes.append(f'ingress fraction {shape:.2f}, V preferred over a flat bottom at {np.sqrt(max(v_pref, 0)):.1f} sigma, {t14 / np.median(EXPO[w]):.1f} cadences in transit: '
+                         + ('the V does not beat a flat bottom' if resolved else 'ingress not resolved') + ', V-shape cut not applied')
         if np.isfinite(oe_sig) and oe_sig > 3: reasons.append(f'odd/even depth differ at {oe_sig:.1f} sigma')
-        if np.isfinite(sec_sig) and sec_sig > 3: reasons.append(f'secondary eclipse at {sec_sig:.1f} sigma')
+        if np.isfinite(sec_sig) and sec_sig > 3:
+            if sec_consistent: reasons.append(f'secondary eclipse at {sec_sig:.1f} sigma')
+            else: notes.append(f'secondary at {sec_sig:.1f} sigma not confirmed in both halves of the data ({", ".join(f"{h:.1f}" for h in half_sig)} sigma): not used')
         if gaia_res.get('gaia_eb'): reasons.append('Gaia DR3 eclipsing binary')
         if gaia_res.get('ruwe') and gaia_res['ruwe'] > 1.4: reasons.append(f'Gaia RUWE {gaia_res["ruwe"]:.2f} (unresolved companion)')
         if snr < 10: reasons.append(f'folded SNR only {snr:.1f}')
@@ -464,7 +503,7 @@ def vet(con, tic, findings):
             reasons.append(f'transit duration implies a stellar density of only {rho_transit:.3f} g/cc (giant host or systematic)')
         # coherent stellar variability faster than the transit (pulsator): strongest out-of-transit oscillation vs depth
         oot = np.abs(T - (t0 + np.round((T - t0) / P) * P)) > t14
-        if oot.sum() > 200:
+        if oot.sum() > 200 and 1.5 / t14 < 50:
             from astropy.timeseries import LombScargle
             ls = LombScargle(T[oot], Y[oot])
             fq, pw = ls.autopower(minimum_frequency=1.5 / t14, maximum_frequency=50, samples_per_peak=5)

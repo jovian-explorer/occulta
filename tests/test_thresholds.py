@@ -162,9 +162,23 @@ def test_period_refit_with_the_doubled_period_off_by_2e4(tmp_path, monkeypatch):
     assert status == 'ready' and abs(period - 1.2) < 2e-5, (status, period, notes)
 
 
+def test_refine_period_finds_a_period_1e4_off_when_the_epoch_is_not_at_the_middle():
+    """LHS 3844 b case: the BLS epoch lies near the start of an uneven baseline, so the middle of the data is far from
+    the epoch where the BLS phase is right; the refit is anchored at T0 and still reaches P 1.1e-4 d away."""
+    from occulta import planets
+    rng = np.random.default_rng(3)
+    t = np.sort(np.concatenate([2000 + 26 * k + rng.uniform(0, 26, 1500) for k in (0, 1, 2, 60, 61, 100, 101, 102)]))
+    P, T0 = 0.4629291, 2000.1
+    y = 1 + rng.normal(0, 8e-4, t.size)
+    y -= 3500e-6 * (np.abs(((t - T0) / P + 0.5) % 1 - 0.5) * P < 0.25 / 24)
+    q, t0 = planets.refine_period(t, y, P + 1.1e-4, T0, 0.85 / 24)
+    assert abs(q - P) < 1.5e-5, q
+    assert abs(((t0 - T0) / P + 0.5) % 1 - 0.5) * P < 0.006
+
+
 def test_refine_period_is_a_fixed_small_scan():
     from occulta import planets
-    assert planets.REFINE_TRIALS <= 100
+    assert planets.REFINE_TRIALS <= 250
 
 
 def test_faint_planet_with_shallow_single_transits_is_not_absent(tmp_path, monkeypatch):

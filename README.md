@@ -67,6 +67,8 @@ All data are downloaded from the Mikulski Archive for Space Telescopes (MAST), t
 
 Further sources are opt-in and are not in the default plan. TESS-SPOC full-frame-image light curves (Caldwell et al. 2020; up to about 160,000 stars per sector, many more than the 2-minute SPOC set) are searched when `{"mission": "TESS-SPOC"}` is added to `plan` in `config.json`; they are stored as units 4001 and up and read with the same PDCSAP flux and quality flag as the 2-minute SPOC data.
 
+Light curves of the Zwicky Transient Facility (ZTF; Masci et al. 2019), which are sampled about once a night over several years, are searched for one position at a time with `occulta ztf RA DEC`; they carry the unit codes 5001 (zg), 5002 (zr) and 5003 (zi). Only deep events on bright stars can be found in such sparse data, periods near one day are flagged as aliases, and the vetting of ZTF candidates is not yet part of occulta.
+
 JWST and Ariel are not sources: JWST observes chosen targets in short pointed visits, so there is no survey time series to search blindly, and Ariel launches in 2029 and has no data yet. PLATO and CHEOPS are possible later sources.
 
 The catalogues used for vetting are VSX, GCVS, Gaia DR3 (including its non-single-star orbits), the TESS eclipsing-binary catalogues of Prša et al. (2022) and Kostov et al. (2025), the TESS Input Catalog, and SIMBAD; METHODS.md gives the references, collected in docs/refs.bib.

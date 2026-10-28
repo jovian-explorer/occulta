@@ -4,7 +4,8 @@ how star identifiers are encoded.
 Star ids are integers in one namespace: TESS stars keep their TIC number, K2 stars are
 2e10 + EPIC, Kepler stars are 3e10 + KIC. Units (one sector, campaign or quarter) are
 integer codes: QLP sector s -> s, SPOC sector s -> 1000 + s, K2 campaign c -> 2000 + c,
-Kepler quarter file q -> 3000 + q, TESS-SPOC full-frame light curves of sector s -> 4000 + s. All times are stored as BTJD (BJD - 2457000).
+Kepler quarter file q -> 3000 + q, TESS-SPOC full-frame light curves of sector s -> 4000 + s,
+ZTF light curves of filter zg, zr, zi -> 5001, 5002, 5003 (5000 + filter id; one unit per filter because zero points differ). All times are stored as BTJD (BJD - 2457000).
 """
 import io, re
 import numpy as np
@@ -29,6 +30,7 @@ KEPLER_STAMPS = ['2009131105131', '2009166043257', '2009259160929', '20093501555
                  '2012277125453', '2013011073258', '2013098041711', '2013131215648']
 K2_CAMPAIGNS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 102, 111, 112, 12, 13, 14, 15, 16, 17, 18, 19, 91, 92]
 QLP_SECTORS = list(range(104, 0, -1))
+ZTF_FILTERS = {'zg': 5001, 'zr': 5002, 'zi': 5003}    # unit = 5000 + filter id; ZTF is searched by position, not from a target list
 
 
 def mission_of(sid):
@@ -41,6 +43,7 @@ def name_of(sid):
 
 
 def unit_name(u):
+    if u >= 5000: return 'ZTF ' + {v: k for k, v in ZTF_FILTERS.items()}.get(u, f'filter {u - 5000}')
     if u >= 4000: return f'TESS S{u - 4000} FFI SPOC'
     if u >= 3000: return f'Kepler file {u - 3000}'
     if u >= 2000: return f'K2 C{u - 2000}'
@@ -49,7 +52,7 @@ def unit_name(u):
 
 
 def fmt_of_unit(u):
-    return 'spoc' if u >= 4000 else 'kepler' if u >= 3000 else 'k2sff' if u >= 2000 else 'spoc' if u >= 1000 else 'qlp'
+    return 'ztf' if u >= 5000 else 'spoc' if u >= 4000 else 'kepler' if u >= 3000 else 'k2sff' if u >= 2000 else 'spoc' if u >= 1000 else 'qlp'
 
 
 def units(mission):
@@ -59,6 +62,8 @@ def units(mission):
         return [1000 + s for s in QLP_SECTORS]
     if mission == 'TESS-SPOC':
         return [4000 + s for s in QLP_SECTORS]
+    if mission == 'ZTF':
+        return list(ZTF_FILTERS.values())
     if mission == 'K2':
         return [2000 + c for c in K2_CAMPAIGNS]
     if mission == 'Kepler':
@@ -81,6 +86,8 @@ def _script_urls(url, pattern):
 
 def unit_targets(u, kepler_ids=None):
     """{star id: url or None} for every star with a light curve in this unit (None = build from template)."""
+    if u >= 5000:
+        return None        # ZTF has no per-unit target list (IRSA asks for HATS above ~1000 light curves): use `occulta ztf`
     if u < 1000 or u >= 4000:
         r = requests.get((QLP_TARGETS if u < 1000 else TESS_SPOC_TARGETS).format(s=u % 1000 if u >= 4000 else u), timeout=900)
         if r.status_code != 200:
@@ -101,6 +108,8 @@ def url_for(u, sid, versions=('v01', 'v02')):
     if u < 1000:
         z = f'{sid:016d}'
         return [QLP_URL.format(s=u, a=z[:4], b=z[4:8], c=z[8:12], d=z[12:], tic=sid, v=v) for v in versions]
+    if u >= 5000:
+        raise ValueError('ZTF light curves are fetched by position, see occulta.ztf')
     if u >= 4000:
         z = f'{sid:016d}'
         return [TESS_SPOC_URL.format(s=u - 4000, a=z[:4], b=z[4:8], c=z[8:12], d=z[12:], tic=sid)]

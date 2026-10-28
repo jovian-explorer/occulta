@@ -7,6 +7,7 @@ OCCULTA_HOME, or the current directory), which holds the database, the cache, an
     occulta reproduce TIC [--mode planets|binaries|both]
                                                    repeat the whole analysis of one star from public data
     occulta planets vet TIC                        vet one star as a planet host
+    occulta ztf RA DEC                             sparse-cadence search of the public ZTF light curve at a position
     occulta binaries <tool> ...                    analyses of eclipsing binaries (occulta binaries --help)
 """
 import argparse
@@ -69,6 +70,8 @@ def main(argv=None):
     pl = sp.add_parser('planets', help='planet hunting')
     pls = pl.add_subparsers(dest='sub', required=True)
     v = pls.add_parser('vet', help='vet one star as a planet host'); v.add_argument('tic', type=tic_arg)
+    z = sp.add_parser('ztf', help='search the ZTF light curve at a position', add_help=False)
+    z.add_argument('args', nargs=argparse.REMAINDER)
     b = sp.add_parser('binaries', help='eclipsing-binary hunting',
                       description='\n'.join(f'  {k:15s} {d}' for k, (_, d) in BINARY_TOOLS.items()),
                       formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -106,6 +109,9 @@ def main(argv=None):
     elif a.cmd == 'reproduce':
         from . import reproduce
         reproduce.main(a.args)
+    elif a.cmd == 'ztf':
+        from . import ztf
+        ztf.main(a.args)
     elif a.cmd == 'planets':
         paths.init()
         from . import survey

@@ -195,6 +195,9 @@ def prepare_job(con, jid, m, tier, u, deadline):
             con.commit()
             kep = [int(r['kepid']) for r in rows]
     tg = sources.unit_targets(u, kep)
+    if tg is None and m == 'ZTF':
+        con.execute("INSERT OR REPLACE INTO job VALUES (?,?,?,?,?)", (jid, 'missing', 0, None, None))
+        con.commit(); log(jid, 'ZTF has no target list; search a position with `occulta ztf RA DEC`'); return True
     if tg is None:
         con.execute("INSERT OR REPLACE INTO job VALUES (?,?,?,?,?)", (jid, 'missing', 0, None, None))
         con.commit(); log(jid, 'no data at the archive'); return True
