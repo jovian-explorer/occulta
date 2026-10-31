@@ -140,6 +140,22 @@ Status words: **sourced** (the method or value follows the cited work), **choice
 | Catalogues | `VIZ`, `CATS` | VSX, GCVS, Gaia DR3 EB and classes, Prša et al. 2022, IJspeert et al. 2024, Kostov et al. 2025, SIMBAD, ExoFOP | Watson et al. 2006 (no DOI); Samus et al. 2017; Mowlavi et al. 2023; Rimoldini et al. 2023; Wenger et al. 2000 | sourced |
 | Radii | `catalogues.py:26, 35`; `crossmatch.py:72, 75` | 10″ for the star, 63″ (three TESS pixels) for neighbours, 180″ for VSX variables ≥ 2 mag brighter | choice | untested (needs the live services) |
 
+## Further searches (`rogues.py`, `moons.py`, `singles.py`; METHODS.md Section 8)
+
+| Item | Where | Value | Source | Status |
+|---|---|---|---|---|
+| Point-lens magnification | `rogues.magnification` | A(u) = (u² + 2)/(u √(u² + 4)); uniform finite source by numerical integration | Paczyński 1986; Witt & Mao 1994 | sourced, tested (`test_rogues.py`) |
+| Flare template | `rogues.flare` | rise polynomial and two-exponential decay | Davenport et al. 2014 | sourced, tested |
+| Lens acceptance | `DCHI2_FLAT`, `DCHI2_FLARE`, `TE_MIN_D`, `TE_MAX_D`, `ASYM_SIGMA` | Δχ² ≥ 50 over flat, ≥ 9 over flare; 1 h ≤ t_E ≤ 1.5 d; mirror asymmetry < 3σ | choice | tested (injection grid, flares, 40 noise sectors) |
+| Moving-source rejection | `MOTION_SIGMA`; `minor_bodies` | centroid or background change > 5σ; SkyBoT within 2 arcmin | Berthier et al. 2006 (SkyBoT, no DOI) | choice; SkyBoT untested (online) |
+| Common-mode brightenings | `COMMON_DT_D`, config `common_mode_n` | ≥ 5 stars on one CCD within 0.1 d | choice, as for dips | tested |
+| TTV and TDV periodogram | `moons.periodogram` | generalised Lomb-Scargle, 1/span to 0.5 cycles per transit, Baluev FAP | Zechmeister & Kürster 2009; Baluev 2008 | sourced, tested (`test_moons.py`) |
+| Moon detection | `MOON_FAP`, `PHASE_P`, `PHASE_SIGMA` | one series FAP < 10⁻³, the other p < 10⁻² at the same frequency, phase 90° within 2σ | Kipping 2009a (quadrature); thresholds choice | tested (quadrature, TTV alone, in phase, 40 noise trials) |
+| Moon mass limit | `moon_ttv_rms`, `moon_tdv_rms`, `LIM_CL`, `HILL_STABLE`, `planet_mass` | rms TTV and TDV for random phases; Δ(−2 ln L) = 2.71; orbits 2 Rp to 0.4895 R_Hill; mean mass-radius relation | Sartoretti & Schneider 1999; Kipping 2009a; Domingos et al. 2006; Chen & Kipping 2017 | sourced, tested |
+| OSE stack | `ose_template`, `ose_stack`, `OSE_FAP`, `OSE_SNR`, `N_FLIPS` | 16 trial orbits; FAP < 10⁻² from 4000 sign flips of the residual windows; S/N ≥ 7 | Heller 2014; thresholds choice | tested (1000 ppm found, 30 noise trials) |
+| Single-transit period | `singles.period_from_duration`, `min_period`, `B_HI`, `P_MAX_D` | P = πGM★T₁₄³/(4R★³L³) for b = 0, 0.5, 0.8; coverage limit up to 3000 d | Seager & Mallén-Ornelas 2003 | sourced, tested (`test_singles.py`) |
+| Single and dipper selection | `SNR_SINGLE`, `SAME_D`, `DCHI2_TAIL` | S/N ≥ 9, no flag; dips within 0.5 d merged; tail better than trapezoid by Δχ² ≥ 25 | Rappaport et al. 2012 (tail shape); thresholds choice | tested |
+
 ## References checked with Argus
 
 All DOIs in `docs/refs.bib` resolve to the cited works. Argus marks ten as "suspect" only for benign reasons: the Gaia DR3 papers (Gaia Collaboration 2023a, b; Halbwachs; Mowlavi; Rimoldini) and Lindegren et al. 2021 carry their subtitle in the registry as a separate field, SIMBAD (Wenger et al. 2000) likewise, and Stumpe et al. 2012 is registered with its first page only. Ricker et al. (2015) is registered by Crossref with the online date of 24 October 2014 and the page range 1-10; text and `refs.bib` both give 2015, the year of the journal volume, and the article number 014003, so Argus marks its first page. Watson et al. 2006 (VSX) and Kopal 1959 have no DOI. The Zenodo record of TIC 402710280.01 (Vora 2026) was checked through OpenAlex.

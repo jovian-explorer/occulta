@@ -9,6 +9,9 @@ OCCULTA_HOME, or the current directory), which holds the database, the cache, an
     occulta planets vet TIC                        vet one star as a planet host
     occulta ztf RA DEC                             sparse-cadence search of the public ZTF light curve at a position
     occulta binaries <tool> ...                    analyses of eclipsing binaries (occulta binaries --help)
+    occulta rogues search TIC | scan | list        microlensing brightenings of free-floating planets
+    occulta moons search [TIC ...]                 transit-timing, duration and orbital-sampling search for moons
+    occulta singles scan | search TIC | list       single transits and aperiodic or tail-shaped dips
 """
 import argparse
 import os
@@ -72,12 +75,20 @@ def main(argv=None):
     v = pls.add_parser('vet', help='vet one star as a planet host'); v.add_argument('tic', type=tic_arg)
     z = sp.add_parser('ztf', help='search the ZTF light curve at a position', add_help=False)
     z.add_argument('args', nargs=argparse.REMAINDER)
+    for name, text in (('rogues', 'microlensing search for free-floating planets (occulta rogues --help)'),
+                       ('moons', 'TTV, TDV and orbital-sampling search for moons (occulta moons --help)'),
+                       ('singles', 'single transits and aperiodic dippers (occulta singles --help)')):
+        sp.add_parser(name, help=text, add_help=False).add_argument('args', nargs=argparse.REMAINDER)
     b = sp.add_parser('binaries', help='eclipsing-binary hunting',
                       description='\n'.join(f'  {k:15s} {d}' for k, (_, d) in BINARY_TOOLS.items()),
                       formatter_class=argparse.RawDescriptionHelpFormatter)
     b.add_argument('tool', choices=list(BINARY_TOOLS))
     b.add_argument('args', nargs=argparse.REMAINDER)
-    a = ap.parse_args(argv)
+    a, extra = ap.parse_known_args(argv)
+    if extra and a.cmd in ('rogues', 'moons', 'singles', 'ztf', 'reproduce'):
+        a.args = extra + a.args                  # an option first ("rogues --help") is not taken by REMAINDER
+    elif extra:
+        ap.error('unrecognized arguments: ' + ' '.join(extra))
 
     if a.version:
         from . import __version__
@@ -88,7 +99,8 @@ def main(argv=None):
         ap.print_help(); return
     # the working directory is fixed only now, so that every module sees the same one
     from . import paths
-    if a.cmd in ('survey', 'planets', 'binaries') and not (a.home or os.environ.get('OCCULTA_HOME'))             and not (Path.cwd() / 'config.json').exists():
+    asks_help = bool(set(getattr(a, 'args', None) or []) & {'-h', '--help'})
+    if a.cmd in ('survey', 'planets', 'binaries', 'rogues', 'moons', 'singles') and not asks_help and not (a.home or os.environ.get('OCCULTA_HOME'))             and not (Path.cwd() / 'config.json').exists():
         sys.exit(f'There is no occulta working directory here ({Path.cwd()}). Create one with "occulta init" '
                  '(in an empty folder), or point to an existing one with --home FOLDER or the environment '
                  'variable OCCULTA_HOME.')
@@ -112,6 +124,9 @@ def main(argv=None):
     elif a.cmd == 'ztf':
         from . import ztf
         ztf.main(a.args)
+    elif a.cmd in ('rogues', 'moons', 'singles'):
+        import importlib
+        importlib.import_module(f'occulta.{a.cmd}').main(a.args)
     elif a.cmd == 'planets':
         paths.init()
         from . import survey

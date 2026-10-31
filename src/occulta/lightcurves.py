@@ -213,8 +213,9 @@ def run_bls(t, y, span):
             'sec_depth_ppm': float(st['depth_phased'][0] * 1e6)}
 
 
-def process(path, tic, sector, fmt='qlp', do_bls=True):
-    """Full per-light-curve analysis. Returns dict or {'error': ...}."""
+def process(path, tic, sector, fmt='qlp', do_bls=True, brightenings=False):
+    """Full per-light-curve analysis. Returns dict or {'error': ...}. With `brightenings`, the light curve is also searched
+    for microlensing events (rogues.py) and the result carries them under 'brightenings'."""
     try:
         t, f, bkg, cx, cy, meta = read_lc(path, fmt)
         o = np.argsort(t); t, f, bkg, cx, cy = t[o], f[o], bkg[o], cx[o], cy[o]
@@ -236,9 +237,19 @@ def process(path, tic, sector, fmt='qlp', do_bls=True):
         k1 = max(1, int(round(1 / 24 / dt)))
         _, m_in, _, _, ok = box_scan(yg, k1)
         noise1h = mad_std(np.where(ok, m_in, np.nan))
-        return {'tic': tic, 'sector': sector, 'cam': meta['cam'], 'ccd': meta['ccd'],
+        res = None
+        if brightenings:
+            from . import rogues
+            try:
+                res = rogues.search_lc(t, f, bkg, cx, cy, rogues.flagged_times(path, fmt))
+            except Exception:
+                res = []
+        out = {'tic': tic, 'sector': sector, 'cam': meta['cam'], 'ccd': meta['ccd'],
                 'npts': int(t.size), 't_start': float(t[0]), 't_end': float(t[-1]),
                 'noise_ppm': float(sigma * 1e6), 'noise1h_ppm': float(noise1h * 1e6), 'inv_snr': float(inv),
                 'events': events, 'bls': bls}
+        if res is not None:
+            out['brightenings'] = res
+        return out
     except Exception as e:  # keep the run alive on corrupt files
         return {'tic': tic, 'sector': sector, 'error': repr(e)[:200]}

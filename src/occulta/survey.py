@@ -57,6 +57,16 @@ def db(path=None):
     CREATE TABLE IF NOT EXISTS candidate(tic INTEGER PRIMARY KEY, kind TEXT, period REAL, t0 REAL, dur_h REAL,
         depth_ppm REAL, snr REAL, n_events INTEGER, sectors TEXT, status TEXT, score REAL, notes TEXT,
         created TEXT, updated TEXT);
+    CREATE TABLE IF NOT EXISTS brightening(tic INTEGER, sector INTEGER, cam INTEGER, ccd INTEGER, t0 REAL, te_d REAL,
+        u0 REAL, fs REAL, amp_ppm REAL, snr REAL, dchi2_flat REAL, dchi2_flare REAL, asym_sigma REAL, motion_sigma REAL,
+        offset_sigma REAL, bkg_sigma REAL, chi2r REAL, flags TEXT, status TEXT, PRIMARY KEY(tic, sector, t0));
+    CREATE TABLE IF NOT EXISTS rogue_scan(tic INTEGER, sector INTEGER, status INTEGER, PRIMARY KEY(tic, sector));
+    CREATE TABLE IF NOT EXISTS moon(tic INTEGER PRIMARY KEY, status TEXT, n_transits INTEGER, ttv_rms_s REAL,
+        ttv_fap REAL, tdv_fap REAL, phase_deg REAL, ose_snr REAL, ose_fap REAL, ms_limit_mearth REAL,
+        rs_limit_rearth REAL, updated TEXT);
+    CREATE TABLE IF NOT EXISTS single(tic INTEGER, sector INTEGER, t0 REAL, dur_h REAL, depth_ppm REAL, snr REAL,
+        kind TEXT, p_min_d REAL, p_dur_d REAL, p_dur_lo REAL, p_dur_hi REAL, rp_earth REAL, asym_sigma REAL, notes TEXT,
+        PRIMARY KEY(tic, sector, t0));
     """)
     return con
 
@@ -252,6 +262,10 @@ def store(con, res):
     con.executemany('INSERT INTO event VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     [(t, s, res['cam'], res['ccd'], e['t0'], e['dur_h'], e['depth_ppm'], e['snr'], e['n_in'],
                       e['vratio'], e['flags']) for e in res['events']])
+    if res.get('brightenings') is not None:
+        from . import rogues
+        rogues.store(con, t, s, res['cam'], res['ccd'], res['brightenings'], FIND)
+        con.execute('INSERT OR REPLACE INTO rogue_scan VALUES (?,?,1)', (t, s))
     b = res['bls']
     if b and b['sde'] >= CFG['bls_sde'] and b['snr'] >= CFG['bls_snr']:
         con.execute('INSERT OR REPLACE INTO bls VALUES (?,?,?,?,?,?,?,?,?,?,?)',
@@ -264,6 +278,7 @@ def work_job(con, jid, m, u, deadline):
     from . import lightcurves as lcsearch
     fmt = sources.fmt_of_unit(u)
     do_bls = m != 'Kepler'     # Kepler's periodic signals were exhausted by its own pipeline; we look for single events
+    brighten = bool(CFG.get('search_brightenings', False))   # microlensing search of every light curve (rogues.py), off by default
     con.execute("UPDATE job SET status='running' WHERE job=?", (jid,)); con.commit()
     todo = con.execute('SELECT tic, url FROM target WHERE sector=? AND status=0', (u,)).fetchall()
     log(jid, len(todo), 'light curves to go')
@@ -290,7 +305,7 @@ def work_job(con, jid, m, u, deadline):
                     if path is None:   # not observed in this unit, or missing at the archive
                         con.execute('UPDATE target SET status=3 WHERE sector=? AND tic=?', (u, sid))
                         continue
-                    pending_pp[pp.submit(lcsearch.process, path, sid, u, fmt, do_bls)] = path
+                    pending_pp[pp.submit(lcsearch.process, path, sid, u, fmt, do_bls, brighten)] = path
                 else:
                     path = pending_pp.pop(f)
                     try:
@@ -306,6 +321,9 @@ def work_job(con, jid, m, u, deadline):
     left = con.execute('SELECT COUNT(*) FROM target WHERE sector=? AND status=0', (u,)).fetchone()[0]
     if left == 0:
         mark_systematics(con, u)
+        if CFG.get('search_brightenings'):
+            from . import rogues
+            rogues.rank(con, FIND, CFG.get('common_mode_n', 5))
         con.execute("UPDATE job SET status='done', finished=? WHERE job=?", (time.strftime('%Y-%m-%d %H:%M'), jid))
         con.commit()
         log(jid, 'complete')
@@ -419,6 +437,19 @@ def vet_new(con, deadline):
             con.commit()
 
 
+def extra_searches(con):
+    """Searches that run over what the survey has already kept, each switched on in config.json (all off by default):
+    "search_moons" (TTV, TDV and orbital-sampling stack of every planet that is ready, moons.py) and "search_singles"
+    (single transits and aperiodic dippers in the dip table, singles.py)."""
+    for key, mod in (('search_moons', 'moons'), ('search_singles', 'singles')):
+        if CFG.get(key):
+            try:
+                import importlib
+                importlib.import_module(f'occulta.{mod}').run_survey(con, FIND)
+            except Exception:
+                log(mod, 'failed', traceback.format_exc()[-300:])
+
+
 def analyse_binaries(deadline):
     """Stellar signals rejected as planets: cross-match with variable-star catalogues, then analyse every
     uncatalogued one as an eclipsing binary (binaries/eb/<TIC>.json/.png)."""
@@ -479,6 +510,7 @@ def run(minutes, mode='both'):
             promote(con)
         promote(con)
         vet_new(con, deadline - 300)
+        extra_searches(con)
         if mode in ('binaries', 'both'):
             try:
                 analyse_binaries(deadline - 60)

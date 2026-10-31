@@ -104,6 +104,9 @@ occulta survey map --refresh-totals               # the same, with the MAST ligh
 occulta reproduce 181149914 --mode both           # repeat the whole analysis of one star from public data
 occulta planets vet 402710280                     # vet one star as a planet host
 occulta binaries --help                           # the tools for eclipsing binaries
+occulta rogues search TIC                         # brightenings with the shape of a microlensing event (free-floating planets)
+occulta moons search                              # transit timing, duration and orbital-sampling-effect tests for moons of vetted planets
+occulta singles scan                              # single transits and aperiodic dippers among the dips already measured
 ```
 
 The option `--mode` decides what is hunted. With `planets`, the survey searches the light curves and vets each candidate as a planet, and stellar signals are set aside. With `binaries`, every signal that the planet vetting rejects for a stellar reason, and that no catalogue of variable stars contains, is analysed as an eclipsing binary; with `both`, the default, the two hunts run together.

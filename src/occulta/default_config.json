@@ -8,6 +8,9 @@
  "bls_snr": 10.0,
  "bls_sde": 9.0,
  "common_mode_n": 5,
+ "search_brightenings": false,
+ "search_moons": false,
+ "search_singles": false,
  "plan": [
   {
    "mission": "QLP",

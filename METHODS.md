@@ -4,7 +4,7 @@ Keshav Aggarwal
 
 ## 1. Overview
 
-Space-based photometric surveys have recorded the brightness of several million stars with a precision of tens to hundreds of parts per million, providing an archive in which transiting planets, eclipsing binaries, and other periodic or transient phenomena are recorded whether or not they have been identified. The Transiting Exoplanet Survey Satellite (TESS) alone has produced full-frame images (FFIs) of nearly the entire sky since 2018, while the Kepler and K2 missions observed about half a million stars at higher precision. Although the mission teams and the community have searched these data extensively, the catalogues of planets and eclipsing binaries remain incomplete, in particular for signals with long periods, long durations, or eccentric orbits, which fall outside the assumptions of the standard search pipelines. In this work, we search the public light curves blindly, vet every repeating signal, and report each object that no catalogue lists. The software described here performs every step from the download of the light curves to the final report, and each detection can be reproduced from public data with a single command (Section 9).
+Space-based photometric surveys have recorded the brightness of several million stars with a precision of tens to hundreds of parts per million, providing an archive in which transiting planets, eclipsing binaries, and other periodic or transient phenomena are recorded whether or not they have been identified. The Transiting Exoplanet Survey Satellite (TESS) alone has produced full-frame images (FFIs) of nearly the entire sky since 2018, while the Kepler and K2 missions observed about half a million stars at higher precision. Although the mission teams and the community have searched these data extensively, the catalogues of planets and eclipsing binaries remain incomplete, in particular for signals with long periods, long durations, or eccentric orbits, which fall outside the assumptions of the standard search pipelines. In this work, we search the public light curves blindly, vet every repeating signal, and report each object that no catalogue lists. The software described here performs every step from the download of the light curves to the final report, and each detection can be reproduced from public data with a single command (Section 10).
 
 ## 2. Data
 
@@ -63,11 +63,55 @@ For the systems reported individually, three further analyses are made.
 
 A detection is considered new only when the star is absent from the live versions (queried through VizieR, not a cached cross-match service) of the International Variable Star Index (VSX; Watson et al. 2006), the General Catalogue of Variable Stars (GCVS; Samus et al. 2017), the Gaia DR3 eclipsing-binary and variability classifications (Mowlavi et al. 2023; Rimoldini et al. 2023), the TESS eclipsing-binary catalogues of Prša et al. (2022), IJspeert et al. (2024), and Kostov et al. (2025), the variable-star classes of SIMBAD (Wenger et al. 2000), and the ExoFOP lists of TESS Objects of Interest and community TOIs. A radius of 10 arcsec is used for the star itself; catalogued variables between 10 and 63 arcsec are listed as possible contaminants of the TESS aperture.
 
-## 8. Validation
+## 8. Searches beyond periodic dips
+
+Three further searches use the same light curves and the same database. Each is switched off by default in `config.json`, so that the survey behaves exactly as described above unless a search is enabled, and each can also be run on its own from the command line.
+
+### 8.1 Free-floating planets by microlensing
+
+A planet that is not bound to any star emits almost no light and can be observed only through its gravity, when it passes in front of a background star and magnifies it for a time set by its Einstein radius. For a lens of Jupiter mass in the Galactic disk this time is about a day, and for a lens of Earth mass it is a few hours (Mróz et al. 2017). Since TESS observes each star almost continuously for about 27 d, its light curves can record such events in bright stars, although the population of free-floating planets outside the dense fields of the Galactic bulge remains poorly quantified. In this survey, we therefore search every light curve for single, symmetric brightenings (`occulta rogues`, or `"search_brightenings": true`).
+
+The light curve is detrended with a running median of 4 d, wider than the 2 d of Section 3, so that an event lasting a day is preserved, and the box search of Section 3 is applied to the inverted flux. Every brightening with a signal-to-noise ratio of at least 7 is fitted on a window around it; light curves with cadences shorter than 10 min are binned to 10 min, and every model is integrated over the exposure time. The point-lens model (Paczyński 1986) is
+
+F(t) = F₀ [f_s A(u) + 1 − f_s],   u(t) = √(u₀² + ((t − t₀)/t_E)²),   A(u) = (u² + 2) / (u √(u² + 4)),
+
+where t₀ is the time of closest approach, t_E the Einstein crossing time, u₀ the impact parameter in Einstein radii, and f_s the fraction of the flux in the aperture that comes from the lensed star. With the option `--finite-source`, the magnification of a uniform stellar disk of radius ρ (in Einstein radii) is integrated numerically over the disk (Witt & Mao 1994), which matters when the lens passes over the face of the star. The same window is also fitted with a flat baseline and with the empirical flare template of Davenport et al. (2014), since stellar flares are by far the most frequent brightenings and differ from a lensing event by their fast rise and slow decay.
+
+An event is kept as a lens candidate when the point lens fits better than the flat baseline by Δχ² ≥ 50 and better than the flare template by Δχ² ≥ 9, t_E lies between 1 h and 1.5 d, the residuals about t₀ are mirror-symmetric within 3σ, the event is covered on both sides of its peak and lies at least 0.3 d from a gap, and no cadence within it carries a quality flag (momentum dumps and scattered light). An asteroid that crosses the aperture produces a brightening of similar duration, but it also moves the flux-weighted centroid; events during which either centroid coordinate or the background changes by more than 5σ are therefore rejected, and with the option `--skybot` the SkyBoT service (Berthier et al. 2006) is queried for known minor bodies within 2 arcmin of the star at the time of the peak. Brightenings of five or more stars on the same camera and CCD within 0.1 d of one another are rejected as detector systematics, as for the dips (Section 3). The surviving events are ranked by the Δχ² of the lens over the flat baseline and written to `findings/rogues/`. Since t_E, u₀ and f_s are strongly degenerate in weak events, the fitted t_E of such events is reliable only to tens of per cent (Section 8.4).
+
+### 8.2 Exomoons
+
+The moons of the Solar System far outnumber its planets, but no moon of an extrasolar planet has yet been confirmed, and the occurrence of large moons around transiting planets remains poorly constrained. A moon displaces its planet about their common barycentre, so that successive transits arrive early or late (transit timing variations, TTV; Sartoretti & Schneider 1999), while the velocity of the planet about the barycentre changes the transit duration (transit duration variations, TDV; Kipping 2009a). For a moon on a circular orbit, the two signals share one period and differ in phase by 90°, which distinguishes a moon from a perturbing planet. Moreover, the moon itself blocks starlight near the transit of its planet, and when many transits are averaged, its orbit produces a shallow, symmetric dip on both sides of the planetary transit (orbital-sampling effect, OSE; Heller 2014). In this survey, we apply both tests to every planet that the vetting of Section 5 marks as ready (`occulta moons`, or `"search_moons": true`), using the transit windows that the vetting keeps, so that nothing is downloaded again.
+
+The mid-time and the duration of every transit that is covered at 80 % with baseline on both sides are fitted with the folded trapezoid of Section 5, with its depth and ingress fraction fixed, on a local straight line. A weighted linear ephemeris gives the TTV as the residuals O − C, and the TDV are the durations minus their weighted mean. When at least five transits are timed, each series is examined with the generalised Lomb-Scargle periodogram (Zechmeister & Kürster 2009) over frequencies from the inverse of the span to 0.5 cycles per transit, a band into which the much shorter period of any moon is aliased, and the false-alarm probability (FAP) of the highest peak is computed after Baluev (2008). A sinusoid r = A cos(2πfn − φ) + c, with n the transit number, is then fitted to both series at the frequency of the more significant peak, with its covariance scaled by the reduced χ² when that exceeds unity. A moon is reported (`moon_timing`) when one series has a FAP below 10⁻³, the other shows a sinusoid at the same frequency whose probability under noise alone (χ² with two degrees of freedom) is below 10⁻², and the phase difference equals 90° within 2σ. A significant TTV or TDV that fails the phase test is reported as a timing variation, since a perturbing planet, starspots, or systematics are then more likely.
+
+Where nothing is found, an extra scatter s beyond the measured errors e_i is constrained by the profile likelihood of r_i ~ N(0, e_i² + s²), and its one-sided 95 % upper limit, at Δ(−2 ln L) = 2.71, is converted into a moon mass. For a moon of mass M_s on a circular, coplanar orbit of radius a_s around a planet of mass M_p that orbits its star at a distance a_p with period P, and for moon phases sampled at random, the rms variations are
+
+δ_TTV = a_s M_s P / (2√2 π a_p M_p),   δ_TDV = T₁₄ M_s √(G / (a_s M_p)) P / (2√2 π a_p)
+
+(Sartoretti & Schneider 1999; Kipping 2009a). The planet mass is derived from its radius with the mean mass-radius relation of Chen & Kipping (2017), and the lower of the two mass limits is reported for orbits between two planet radii and 0.4895 Hill radii, the widest stable prograde orbit (Domingos et al. 2006).
+
+For the OSE, the residuals of the trapezoid outside the planetary transit are stacked about the measured mid-time of each transit. A moon whose projected separation from the planet corresponds to a crossing time τ_s is in transit at time τ from mid-transit for a fraction f(τ) = [arccos((τ − h)/τ_s) − arccos((τ + h)/τ_s)] / π of its orbital phases, where h is half the transit duration (Heller 2014). This template is fitted for 16 values of τ_s between the time the planet takes to cross two planet radii and the time it takes to cross the stable Hill radius. The FAP of the best signal-to-noise ratio is derived from 4000 random sign flips of whole transit windows of the residuals that remain after the best template is subtracted, and a dip is accepted when its FAP is below 10⁻² and its signal-to-noise ratio is at least 7, since sign flips of a few windows cannot reach smaller probabilities. The 95 % upper limit on the depth, d₉₅ = d + 1.645σ_d, gives the upper limit on the moon radius, R_s = R★ √d₉₅. When every stable orbit is crossed within the planetary transit itself, no OSE stack can be formed, and the report states this.
+
+### 8.3 Single transits and aperiodic dippers
+
+Planets with orbital periods of years transit only once within the data of most stars, so that no periodic search can find them, and the dips that were observed only once are among the most likely to have been missed. In this survey, we examine these dips with `occulta singles scan` (or `"search_singles": true`), which reads the dips already measured by the search of Section 3, so that nothing is downloaded. A dip is kept when its signal-to-noise ratio is at least 9, higher than the 7 of the event search because no repeat confirms it, when it is free of every flag and exceeds the false-alarm level of its light curve, and when it belongs neither to a candidate nor to a known planet or catalogued eclipsing binary; dips within 0.5 d of one another, measured in two products of one sector, are counted once. A star with one such dip yields a single transit, while a star with several dips that do not agree in depth and duration under the criteria of Section 4 yields an aperiodic dipper.
+
+For a single transit, the shortest period allowed by the data is the smallest period, up to 3000 d, at which no other transit falls inside an observed window, each window shrunk by half the transit duration so that a partly covered transit does not count. Since gaps inside a window are treated as observed, this limit is too long when a second transit fell into such a gap. A second estimate is derived from the duration and the stellar density. For a circular orbit, T₁₄ = P R★ L / (π a), with L = √((1 + k)² − b²), k the radius ratio and b the impact parameter, and together with Kepler's third law this gives
+
+P = π G M★ T₁₄³ / (4 R★³ L³)
+
+(Seager & Mallén-Ornelas 2003), which is reported for b = 0.5 together with the range from b = 0 to b = 0.8. Furthermore, `occulta singles search` downloads every light curve of the stars and fits each clean dip both with a symmetric trapezoid and with the profile of a dusty tail that trails a disintegrating planet, a linear ingress followed by an exponential recovery (Rappaport et al. 2012), which has the same number of parameters. A dip whose tail profile fits better by Δχ² ≥ 25 is classified as a dipper.
+
+### 8.4 Tests of the three searches
+
+The searches were tested offline by injection into synthetic light curves (`tests/test_rogues.py`, `tests/test_moons.py`, `tests/test_singles.py`). For point-lens events with u₀ = 0.5 injected into light curves with 1000 ppm noise per 10-min cadence, events with a peak of 6000 ppm were recovered without flags in 8 of 8 trials for t_E = 3.6 h and 12 h, in 6 of 8 for t_E = 24 h, and in 4 of 8 for t_E = 1.2 h, where the fitted t_E often falls below the 1-h limit; at peaks of 15,000 ppm the recovery was 6-8 of 8 for every t_E, while at 1500 ppm it fell to 0-3 of 8. The median error of t_E was between 9 % and 41 % for the events recovered at peaks of 6000 ppm and above. Flares of 0.2-2.4 h width and 3000-30,000 ppm amplitude were rejected in every trial that triggered the search, and 40 light curves of pure noise gave no unflagged event. For a planet with 30 timed transits, mid-time errors of about 1.1 min and duration errors of about 2.4 min, a moon with TTV and TDV amplitudes of 2 and 3 min was recovered in 6 of 8 trials and one with 3 and 4.5 min in 7 of 8, while amplitudes of 1 and 1.5 min were not recovered. Pure noise gave no moon signal in 40 trials, and TTV and TDV in phase, as a perturbing planet produces, gave a timing variation and no moon in all 16 trials. An OSE dip of 1000 ppm or more was recovered in 12 of 12 trials of 12 transits with 500 ppm noise, whereas dips of 500 ppm and less were not, and 30 noise trials gave no false OSE dip. Finally, symmetric transits were never classified as dippers, whereas tails of 3000 ppm and 6000 ppm depth were classified as dippers in 8 of 8 trials, and tails of 1500 ppm in none.
+
+## 9. Validation
 
 The pipeline recovers known objects without prior information on their periods. From the dips found by the search in TESS data, the vetting stage recovers TIC 402710280.01 at 36.340 d (Vora 2026); from K2 and Kepler data, it recovers K2-3 b at 10.0523 d (published 10.0545 d) and Kepler-10 c at 45.2896 d (published 45.2949 d). Pulsators are rejected, as shown by TIC 192930466, a δ Scuti star whose pulsation beating produced an apparent 5000 ppm dip that passed the earlier tests. The eclipsing-binary analysis was checked on CPD-37 4813 (TIC 181149914), which `occulta reproduce` rediscovers from public data with no prior information; both recoveries form the test suite of the package (`tests/test_recovery.py`).
 
-## 9. Reproducing a detection
+## 10. Reproducing a detection
 
 ```
 pip install "git+https://github.com/jovian-explorer/occulta.git"      # or, from a copy of the repository: pip install .
@@ -76,22 +120,29 @@ occulta reproduce <TIC> --mode both
 
 `occulta reproduce` downloads every light curve of the star from MAST, runs the search of Section 3 on each, stitches the dips into a candidate exactly as the survey does (Section 4) but with no catalogue of known objects loaded, vets it as a planet (Section 5), analyses it as an eclipsing binary when the signal is stellar (Section 6; the option `--mode planets` stops after the planet vetting, and `--mode binaries` analyses the signal as a binary whatever the vetting decides), queries the catalogues (Section 7), and writes all results, figures, the list of data files, and SHA-256 checksums of the code to `reproduce_out/<TIC>/`. The full survey is run with `occulta survey run --minutes 55 --mode both`, which resumes where it stopped, and `occulta survey status` and `occulta survey map` report its progress; with `--mode planets`, the survey searches and vets planet candidates only, and with `--mode binaries` or `--mode both`, it also analyses every uncatalogued stellar signal as an eclipsing binary.
 
-## 10. Limitations
+## 11. Limitations
 
 The search relies on the aperture photometry of QLP, SPOC, K2SFF, and Kepler, so that a signal can be attributed to the target only to within the aperture, about one arcminute for TESS; neighbours that could produce each signal are listed, and for the systems that are reported, the source is assigned with difference images of the TESS pixels (Section 6), although stars closer than about 8 arcsec can only be separated by higher-resolution photometry. Eclipses longer than about a day are partly absorbed by the 2-day trend, so that the depths of very long eclipses are lower limits. The period of a binary whose two eclipses are identical cannot be separated from half its value by photometry alone, and such cases are reported at the period that shows two eclipses. QLP Sectors 99-104 await a timestamp correction, and timings from them are provisional; in these sectors, the depths of some eclipses in the QLP light curves also disagree with uniform photometry of the same images, so that depths are taken from the 2-minute light curves or from that photometry.
 
 ## References
 
 Astropy Collaboration et al. 2022, ApJ, 935, 167
+Baluev, R. V. 2008, MNRAS, 385, 1279
+Berthier, J., et al. 2006, ASP Conf. Ser., 351, 367
+Chen, J., & Kipping, D. 2017, ApJ, 834, 17
+Davenport, J. R. A., et al. 2014, ApJ, 797, 122
+Domingos, R. C., Winter, O. C., & Yokoyama, T. 2006, MNRAS, 373, 1227
 Eggleton, P. P. 1983, ApJ, 268, 368
 Gaia Collaboration, Arenou, F., et al. 2023, A&A, 674, A34
 Gaia Collaboration, Vallenari, A., et al. 2023, A&A, 674, A1
 Halbwachs, J.-L., et al. 2023, A&A, 674, A9
+Heller, R. 2014, ApJ, 787, 14
 Huang, C. X., et al. 2020a, RNAAS, 4, 204
 Huang, C. X., et al. 2020b, RNAAS, 4, 206
 IJspeert, L. W., et al. 2024, A&A, 691, A242
 Irwin, J. B. 1952, ApJ, 116, 211
 Jenkins, J. M., et al. 2016, Proc. SPIE, 9913, 99133E
+Kipping, D. M. 2009a, MNRAS, 392, 181
 Kirk, B., et al. 2016, AJ, 151, 68
 Koch, D. G., et al. 2010, ApJL, 713, L79
 Kostov, V. B., et al. 2025, ApJS, 279, 50
@@ -101,10 +152,14 @@ Lindegren, L., et al. 2021, A&A, 649, A2
 Lomb, N. R. 1976, Ap&SS, 39, 447
 Mathur, S., et al. 2017, ApJS, 229, 30
 Mowlavi, N., et al. 2023, A&A, 674, A16
+Mróz, P., et al. 2017, Nature, 548, 183
+Paczyński, B. 1986, ApJ, 304, 1
 Prša, A., et al. 2022, ApJS, 258, 16
+Rappaport, S., et al. 2012, ApJ, 752, 1
 Ricker, G. R., et al. 2015, JATIS, 1, 014003
 Rimoldini, L., et al. 2023, A&A, 674, A14
 Samus, N. N., et al. 2017, Astronomy Reports, 61, 80
+Sartoretti, P., & Schneider, J. 1999, A&AS, 134, 553
 Scargle, J. D. 1982, ApJ, 263, 835
 Seager, S., & Mallén-Ornelas, G. 2003, ApJ, 585, 1038
 Smith, J. C., et al. 2012, PASP, 124, 1000
@@ -115,3 +170,5 @@ Vanderburg, A., & Johnson, J. A. 2014, PASP, 126, 948
 Vora, R. 2026, A 36.34-day Sub-Neptune Candidate Transiting the Nearby K Dwarf TIC 402710280, Zenodo, doi:10.5281/zenodo.23390317
 Watson, C. L., Henden, A. A., & Price, A. 2006, SASS, 25, 47
 Wenger, M., et al. 2000, A&AS, 143, 9
+Witt, H. J., & Mao, S. 1994, ApJ, 430, 505
+Zechmeister, M., & Kürster, M. 2009, A&A, 496, 577
