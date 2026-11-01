@@ -6,7 +6,7 @@ cross-sector signals that no catalogue knows about to candidates.
     occulta survey status                         # progress and candidates
     occulta planets vet TIC                       # vet one star by hand
 """
-import argparse, csv, io, json, os, shutil, sqlite3, sys, time, traceback
+import argparse, csv, io, json, os, random, shutil, sqlite3, sys, time, traceback
 import concurrent.futures as cf
 from pathlib import Path
 
@@ -117,6 +117,28 @@ def build_catalog(con, deadline, tmag):
     return True
 
 
+def fetch_csv(name, url, col, tries=3):
+    """Download a CSV that must contain `col`. Retry with jitter; on failure use the last good cached copy.
+    A bad response (rate-limit or error page) is never written to the cache."""
+    cache = CACHE / f'{name}.csv'
+    for i in range(tries):
+        try:
+            text = requests.get(url, timeout=300).text
+            if col in (csv.DictReader(io.StringIO(text)).fieldnames or []):
+                CACHE.mkdir(parents=True, exist_ok=True)
+                cache.write_text(text, encoding='utf-8')
+                return text
+            log(name, f'response lacks column {col!r} (try {i + 1}/{tries})')
+        except Exception as e:
+            log(name, 'fetch failed', repr(e)[:120])
+        if i < tries - 1:
+            time.sleep(random.uniform(5, 30))
+    if cache.exists():
+        log('WARNING', name, 'fetch failed, using cached copy', cache)
+        return cache.read_text(encoding='utf-8')
+    raise RuntimeError(f'{name}: download from {url} lacks column {col!r} after {tries} tries and no cached copy exists')
+
+
 def refresh_known(con):
     """TOIs, CTOIs, confirmed planets, Kepler KOIs, K2 candidates and EB catalogues; refreshed weekly.
     Epochs are stored as full BJD; star ids use the sources.py namespace."""
@@ -130,11 +152,11 @@ def refresh_known(con):
     def tap(q):
         r = requests.get('https://exoplanetarchive.ipac.caltech.edu/TAP/sync', params={'query': q, 'format': 'csv'}, timeout=600)
         return list(csv.DictReader(io.StringIO(r.text)))
-    toi = requests.get('https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=csv', timeout=300).text
+    toi = fetch_csv('toi', 'https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=csv', 'TIC ID')
     for r in csv.DictReader(io.StringIO(toi)):
         rows.append((int(r['TIC ID']), 'TOI ' + r['TOI'] + ' ' + r['TFOPWG Disposition'], num(r['Period (days)']),
                      num(r['Epoch (BJD)']), num(r['Duration (hours)']), num(r['Depth (ppm)'])))
-    ctoi = requests.get('https://exofop.ipac.caltech.edu/tess/download_ctoi.php?sort=ctoi&output=csv', timeout=300).text
+    ctoi = fetch_csv('ctoi', 'https://exofop.ipac.caltech.edu/tess/download_ctoi.php?sort=ctoi&output=csv', 'TIC ID')
     for r in csv.DictReader(io.StringIO(ctoi)):
         rows.append((int(r['TIC ID']), 'CTOI ' + r['CTOI'], num(r['Period (days)']), num(r['Transit Epoch (BJD)']),
                      num(r['Duration (hrs)']), num(r['Depth ppm'])))
