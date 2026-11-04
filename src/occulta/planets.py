@@ -95,7 +95,7 @@ def get_star(con, sid):
         import csv, io, requests
         q = (f"select ra, dec, k2_kepmag, k2_teff, k2_rad, k2_mass, k2_dist from k2targets where epic_number={sid - sources.K2_OFF}"
              if m == 'K2' else
-             f"select ra, dec, kepmag, teff, radius, mass, dist from q1_q17_dr25_stellar where kepid={sid - sources.KEP_OFF}")
+             f"select ra, dec, kepmag, teff, radius, mass, dist from q1_q17_dr25_ks where kepid={sid - sources.KEP_OFF}")
         rows = list(csv.DictReader(io.StringIO(requests.get('https://exoplanetarchive.ipac.caltech.edu/TAP/sync',
                                                           params={'query': q, 'format': 'csv'}, timeout=120).text)))
         v = [float(x) if x not in ('', None) else None for x in rows[0].values()]

@@ -122,7 +122,7 @@ def url_for(u, sid, versions=('v01', 'v02')):
 def kepler_targets():
     """All Kepler targets with DR25 stellar properties (NASA Exoplanet Archive)."""
     r = requests.get('https://exoplanetarchive.ipac.caltech.edu/TAP/sync', params={
-        'query': 'select kepid, kepmag, teff, radius, mass, ra, dec, dist from q1_q17_dr25_stellar', 'format': 'csv'},
+        'query': 'select kepid, kepmag, teff, radius, mass, ra, dec, dist from q1_q17_dr25_ks', 'format': 'csv'},
         timeout=900)
     import csv
     rows = list(csv.DictReader(io.StringIO(r.text)))
