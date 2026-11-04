@@ -4,7 +4,9 @@ Each eclipse is fitted with a symmetric generalised-Gaussian dip on a local line
 which gives its mid-time tc, depth D, and width; the errors come from the covariance matrix scaled by the
 reduced chi-square. Within each sector, the secondary phase is measured relative to the primaries of the same
 sector, so that it is independent of the long-term period and of any timestamp offset common to the sector.
-Usage: occulta binaries eclipses <TIC> <P_d> <T0_primary_btjd> <phase2> [width_h]
+Usage: occulta binaries eclipses <TIC> <P_d> <T0_primary_btjd> <phase2> [width_h] [--ffi [n_ap=3]]
+With --ffi, the uniform full-frame-image photometry of "occulta binaries photometry" is fitted instead of the
+pipeline light curves, so that depths can be compared across sectors with one aperture and one background.
 Writes binaries/eb/<TIC>_eclipses.csv and <TIC>_by_sector.png."""
 import sys
 from pathlib import Path
@@ -15,7 +17,21 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from . import analysis as eb_vet
-UNIT_NAME = lambda u: f'SPOC S{u - 1000}' if u > 1000 else f'QLP S{u}'
+UNIT_NAME = lambda u: f'FFI S{u - 5000}' if u > 5000 else f'SPOC S{u - 1000}' if u > 1000 else f'QLP S{u}'
+
+
+def load_ffi(tic, n_ap=3):
+    """The FFI cutout photometry of every sector (binaries/eb/ffi/<TIC>_s<sector>_ap<n_ap>.npz), units 5000 + sector."""
+    from .photometry import OUT
+    T, F, U = [], [], []
+    for p in sorted(OUT.glob(f'{tic}_s*_ap{n_ap}.npz')):
+        z = np.load(p); sec = int(p.stem.split('_s')[1].split('_')[0])
+        T.append(z['t']); F.append(z['f']); U.append(np.full(z['t'].size, 5000 + sec))
+    if not T:
+        sys.exit(f'no FFI photometry for TIC {tic} with n_ap={n_ap}; run "occulta binaries photometry" first')
+    T, F, U = map(np.concatenate, (T, F, U))
+    o = np.argsort(T)
+    return T[o], F[o], U[o]
 
 
 def model(t, a, b, tc, D, s, g):
@@ -51,9 +67,14 @@ def fit_one(t, y, tc0, w):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    ffi = None
+    if '--ffi' in argv:
+        i = argv.index('--ffi'); rest = argv[i + 1:]
+        ffi = int(rest[0]) if rest else 3
+        argv = argv[:i]
     tic, P, T0, ph2 = int(argv[0]), float(argv[1]), float(argv[2]), float(argv[3])
     w = float(argv[4]) / 24 if len(argv) > 4 else 0.25
-    T, F, U, *_ = eb_vet.load(tic)
+    T, F, U = load_ffi(tic, ffi) if ffi else eb_vet.load(tic)[:3]
     rows = []
     for u in np.unique(U):
         m = U == u
@@ -66,7 +87,8 @@ def main(argv=None):
                 if r:
                     rows.append((int(u), kind, int(n), *r))
     rows = np.array(rows, dtype=object)
-    out = Path(eb_vet.OUT) / f'{tic}_eclipses.csv'
+    tag = f'_ffi{ffi}' if ffi else ''
+    out = Path(eb_vet.OUT) / f'{tic}{tag}_eclipses.csv'
     with open(out, 'w') as fh:
         fh.write('unit,type,cycle,t_btjd,t_err_d,depth,depth_err,sigma_d,rms\n')
         for r in rows:
@@ -95,7 +117,7 @@ def main(argv=None):
         ax[k].set_ylabel(lab)
     ax[2].errorbar(summ[:, 1], summ[:, 6], summ[:, 7], fmt='o', ms=6, color='0.1'); ax[2].set_ylabel('secondary phase')
     ax[2].set_xlabel('BTJD'); fig.suptitle(f'TIC {tic}: eclipses by sector (P = {P:.6f} d)')
-    fig.tight_layout(); fig.savefig(Path(eb_vet.OUT) / f'{tic}_by_sector.png', dpi=90)
+    fig.tight_layout(); fig.savefig(Path(eb_vet.OUT) / f'{tic}{tag}_by_sector.png', dpi=90)
 
 
 if __name__ == '__main__':

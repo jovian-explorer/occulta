@@ -73,6 +73,8 @@ def main(argv=None):
     pl = sp.add_parser('planets', help='planet hunting')
     pls = pl.add_subparsers(dest='sub', required=True)
     v = pls.add_parser('vet', help='vet one star as a planet host'); v.add_argument('tic', type=tic_arg)
+    px = pls.add_parser('pixels', help='which star in the TESS pixels shows the transit, at the candidate ephemeris')
+    px.add_argument('tic', type=tic_arg)
     z = sp.add_parser('ztf', help='search the ZTF light curve at a position', add_help=False)
     z.add_argument('args', nargs=argparse.REMAINDER)
     for name, text in (('rogues', 'microlensing search for free-floating planets (occulta rogues --help)'),
@@ -130,7 +132,10 @@ def main(argv=None):
     elif a.cmd == 'planets':
         paths.init()
         from . import survey
-        survey.vet_one(a.tic)
+        if a.sub == 'vet':
+            survey.vet_one(a.tic)
+        else:
+            survey.pixels_one(a.tic)
     elif a.cmd == 'binaries':
         import importlib
         mod = importlib.import_module(f'occulta.binaries.{BINARY_TOOLS[a.tool][0]}')

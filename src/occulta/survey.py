@@ -572,6 +572,22 @@ def vet_one(tic):
     vet.vet(con, tic, FIND)
 
 
+def pixels_one(tic):
+    """Difference-image source assignment (binaries.pixels) for a planet candidate, at its stored period, epoch and
+    duration; candidate rows that are not rejected are preferred, and among them the most recently updated."""
+    from .binaries import pixels
+    con = db()
+    c = con.execute("SELECT period, t0, dur_h FROM candidate WHERE tic=? AND period > 0 AND dur_h > 0 "
+                    "ORDER BY status LIKE 'rejected%', updated DESC", (tic,)).fetchone()
+    if not c:
+        sys.exit(f'TIC {tic} has no candidate with a period; run "occulta planets vet {tic}" first')
+    s = con.execute('SELECT ra, dec FROM tic WHERE tic=?', (tic,)).fetchone()
+    if not s or s[0] is None:
+        from astroquery.mast import Catalogs
+        r = Catalogs.query_criteria(catalog='TIC', ID=tic)[0]; s = (float(r['ra']), float(r['dec']))
+    pixels.main([tic, *c, *s])
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest='cmd', required=True)
