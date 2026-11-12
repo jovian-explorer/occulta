@@ -12,7 +12,11 @@ constant-RV test) and the APOGEE DR17 visit scatter (K ~ sqrt(2) vscatter); a co
 candidate an eclipsing binary. For eclipses deeper than 3000 ppm, the ZTF light curve (2018 onward, dec > -30) is
 searched in a narrow window around the transit period, and its odd/even depths and phase-0.5 depth are tested as in
 the vetting; a ZTF depth more than 1.5 times the TESS/Kepler depth (contaminating light blended in the large pixels)
-replaces it in the radius. The label goes into the new candidate column objtype and the reason into notes.
+replaces it in the radius. The observed duration is compared with the longest central (b = 0) transit that the host
+density (from the TIC radius and mass) allows at the period, including the companion radius; a planet or brown-dwarf
+candidate whose duration exceeds DUR_FACTOR (1.5) times that maximum becomes unclassified, since its size rests on a host
+that cannot be the eclipsed star. Without a density the test is skipped and noted. The label goes into the new
+candidate column objtype and the reason into notes.
 
     occulta classify [--status ready] [--no-gaia] [--no-external] [TIC ...]
 """
@@ -109,7 +113,46 @@ def label(depth_ppm, rstar, oe, sec):
     return t, why
 
 
-GAIA_RADIUS_DEG = 2 / 3600          # brightest Gaia DR3 source within 2 arcsec is the host
+DUR_FACTOR = 1.5                    # observed duration above this multiple of the longest central transit fails
+G_CGS = 6.674e-8                    # gravitational constant (cm^3 g^-1 s^-2)
+
+
+def stellar_density(rstar, mstar):
+    """Mean stellar density (g/cm^3) from R_star and M_star in solar units, or None when either is unknown."""
+    if not rstar or not mstar or rstar <= 0 or mstar <= 0:
+        return None
+    return 1.40980 * mstar / rstar ** 3      # mean solar density 1.4098 g/cm^3
+
+
+def max_duration_h(period_d, rho_cgs, depth_ppm=0.0):
+    """Longest first-to-fourth-contact duration (h) of a central (b = 0) transit on a circular orbit (Seager &
+    Mallen-Ornelas 2003; Winn 2010, eq. 14): T = (P / pi) arcsin[(1 + k) / (a / R_star)], with k = sqrt(depth) and
+    a / R_star = (G rho_star P^2 / 3 pi)^(1/3) from Kepler's third law (companion mass neglected)."""
+    if not period_d or not rho_cgs or period_d <= 0 or rho_cgs <= 0:
+        return None
+    p_s = period_d * 86400.0
+    a_r = (G_CGS * rho_cgs * p_s ** 2 / (3 * np.pi)) ** (1 / 3)
+    k = np.sqrt(depth_ppm / 1e6) if depth_ppm and depth_ppm > 0 else 0.0
+    x = min(1.0, (1 + k) / a_r)              # contact orbit: the transit cannot last longer than half the period
+    return period_d / np.pi * np.arcsin(x) * 24
+
+
+def duration_test(dur_h, period_d, rho_cgs, depth_ppm=0.0, factor=DUR_FACTOR):
+    """(too_long, note): the observed duration against the longest central transit that the host density allows. A
+    duration above factor x that maximum is unlikely to come from a companion of this star (only e > ~0.4 near
+    apoastron stretches it by 1.5), so the host parameters, or the star that is eclipsed, are probably not the
+    catalogued ones. No density: no test."""
+    if rho_cgs is None:
+        return False, 'duration test: no density'
+    tmax = max_duration_h(period_d, rho_cgs, depth_ppm)
+    if tmax is None or not dur_h or dur_h <= 0:
+        return False, 'duration test: no period or duration'
+    r = dur_h / tmax
+    note = f'duration {dur_h:.2f} h is {r:.2f} x the longest central transit ({tmax:.2f} h, rho_star {rho_cgs:.2f} g/cc)'
+    return r > factor, note
+
+
+GAIA_RADIUS_DEG = 2 / 3600         # brightest Gaia DR3 source within 2 arcsec is the host
 RUWE_MAX = 1.4                      # above this the single-star astrometric fit is poor (unresolved companion)
 P_TOL = 0.02                        # Gaia orbit period agrees with the transit period (or 1/2, 2x) to 2 per cent
 
@@ -408,12 +451,21 @@ def run(status='ready', tics=None, gaia=True, external=True):
     counts = {}
     for tic, dep, notes, period, t0, dur in rows:
         zeb, znote, zd = ztf_test(zl.get(tic), sources.mission_of(tic), period, t0, dur, dep or 0)
+        rs = stellar_radius(con, tic)
+        dk = zd if dep and zd > ZTF_DILUTION * dep else dep
         if dep and zd > ZTF_DILUTION * dep:      # ZTF's 1 arcsec seeing resolves contaminants that TESS pixels blend
-            t, why = label(zd, stellar_radius(con, tic), *vet_tests(tic))
+            t, why = label(zd, rs, *vet_tests(tic))
             why += f' (ZTF undiluted depth; TESS/Kepler depth {dep:.0f} ppm)'
         else:
-            t, why = label(dep, stellar_radius(con, tic), *vet_tests(tic))
+            t, why = label(dep, rs, *vet_tests(tic))
         m1 = stellar_mass(con, tic)
+        # a planet or brown-dwarf size rests on the catalogued host; a duration the host density cannot produce means
+        # that host is not the eclipsed star (or its parameters are wrong), so the size is undetermined
+        long_, dnote = duration_test(dur, period, stellar_density(rs, m1), dk or 0)
+        if long_ and t in ('planet', 'brown dwarf or low-mass star'):
+            t, why = 'unclassified', f'too long for the host: {dnote}; was {t}: {why}'
+        else:
+            why += '; ' + ('too long for the host: ' if long_ else '') + dnote
         tests = [gaia_test(gd.get(tic), period, m1), gaia_rv(gd.get(tic), period, m1),
                  apogee_test(ap.get(tic), period, m1), lamost_test(lm.get(tic), period, m1), (zeb, znote)]
         for eb, note in tests:
