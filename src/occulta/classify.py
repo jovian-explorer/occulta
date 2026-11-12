@@ -1,4 +1,4 @@
-﻿"""Object type of every vetted candidate. The stellar parameters (radius, effective temperature, mass, TESS magnitude,
+"""Object type of every vetted candidate. The stellar parameters (radius, effective temperature, mass, TESS magnitude,
 contamination ratio) are filled from TIC v8.2 at MAST, and from the star table for Kepler and K2 stars; the companion
 radius follows as Rp = sqrt(depth) * R_star. A candidate is a planet below 2 R_J, a brown dwarf or low-mass star
 (ambiguous) between 2 and 3 R_J, and an eclipsing binary above 3 R_J or when the vetting found a secondary eclipse or an
@@ -15,8 +15,14 @@ the vetting; a ZTF depth more than 1.5 times the TESS/Kepler depth (contaminatin
 replaces it in the radius. The observed duration is compared with the longest central (b = 0) transit that the host
 density (from the TIC radius and mass) allows at the period, including the companion radius; a planet or brown-dwarf
 candidate whose duration exceeds DUR_FACTOR (1.5) times that maximum becomes unclassified, since its size rests on a host
-that cannot be the eclipsed star. Without a density the test is skipped and noted. The label goes into the new
-candidate column objtype and the reason into notes.
+that cannot be the eclipsed star. Without a density the test is skipped and noted. Three further checks then try to
+name the eclipsed object. A host with no TIC radius or mass takes the Gaia DR3 FLAME (else GSP-Phot) values. A dip
+that lasts more than DUTY_CONTACT (0.25) of the period needs (R1 + R2) / a > 0.7 whatever the host, which only a
+contact or near-contact pair gives, so it is an eclipsing binary. A candidate that fails the duration test and has a
+Gaia neighbour closer than 8 arcsec (which the difference-image test of the vetting cannot separate) that could
+produce the depth with an eclipse of at most half its light is a blended eclipsing binary on that neighbour. What is left unclassified has neither a
+stellar radius nor an identified eclipsed star. ZTF depths and odd/even tests need at least three in-eclipse epochs
+whose median shows the eclipse. The label goes into the new candidate column objtype and the reason into notes.
 
     occulta classify [--status ready] [--no-gaia] [--no-external] [TIC ...]
 """
@@ -90,15 +96,15 @@ def vet_tests(tic):
     return f(s.get('odd_even_sigma')), f(s.get('secondary_sigma'))
 
 
-def label(depth_ppm, rstar, oe, sec):
-    """(objtype, reason) of one candidate."""
+def label(depth_ppm, rstar, oe, sec, src='TIC v8.2'):
+    """(objtype, reason) of one candidate; src names the catalogue of the stellar radius."""
     giant = rstar is not None and rstar > GIANT_RSUN
     if np.isfinite(sec) and sec > SEC_SIGMA:
         t, why = 'eclipsing binary', f'secondary eclipse at {sec:.1f} sigma'
     elif np.isfinite(oe) and oe > OE_SIGMA:
         t, why = 'eclipsing binary', f'odd/even depth differ at {oe:.1f} sigma'
     elif rstar is None or not depth_ppm or depth_ppm <= 0:
-        return 'unclassified', 'no stellar radius in TIC v8.2' if rstar is None else 'no transit depth'
+        return 'unclassified', 'no stellar radius in TIC v8.2 or Gaia DR3' if rstar is None else 'no transit depth'
     else:
         rp = np.sqrt(depth_ppm / 1e6) * rstar / RJ_RSUN
         if rp < PLANET_MAX_RJ:
@@ -107,7 +113,7 @@ def label(depth_ppm, rstar, oe, sec):
             t = 'brown dwarf or low-mass star'
         else:
             t = 'eclipsing binary'
-        why = f'Rp {rp:.2f} R_J from R_star {rstar:.2f} R_sun'
+        why = f'Rp {rp:.2f} R_J from R_star {rstar:.2f} R_sun' + ('' if src == 'TIC v8.2' else f' ({src})')
     if giant:
         why += f'; giant host (R_star {rstar:.1f} R_sun)'
     return t, why
@@ -152,6 +158,57 @@ def duration_test(dur_h, period_d, rho_cgs, depth_ppm=0.0, factor=DUR_FACTOR):
     return r > factor, note
 
 
+DUTY_CONTACT = 0.25                 # dip longer than this fraction of the period: (R1 + R2) / a > sin(pi / 4)
+BLEND_SEP_ARCSEC = 8.0              # closer neighbours are not separated by the difference-image test of the vetting
+BLEND_MAX_ECLIPSE = 0.5             # a neighbour must dim by at most half its light to give the observed depth
+
+
+def contact_test(dur_h, period_d, frac=DUTY_CONTACT):
+    """(is_binary, note): a dip that lasts more than frac of the period. For a central eclipse on a circular orbit
+    T / P = arcsin((R1 + R2) / a) / pi, so T / P > 0.25 needs (R1 + R2) / a > 0.71 for any host: the two bodies
+    (nearly) touch, as in a W UMa or near-contact binary, which a planet cannot do outside its Roche limit."""
+    if not dur_h or not period_d or period_d <= 0:
+        return False, ''
+    q = dur_h / 24 / period_d
+    if q <= frac:
+        return False, ''
+    return True, (f'contact or near-contact binary: the dip lasts {q:.2f} of the period, (R1 + R2) / a > '
+                  f'{np.sin(np.pi * min(q, 0.5)):.2f}')
+
+
+def vet_blends(tic):
+    """Resolved Gaia DR3 neighbours that could produce the depth, from the vetting summary ([] when unknown)."""
+    p = survey.FIND / sources.name_of(tic).replace(' ', '') / 'summary.json'
+    if not p.exists():
+        return []
+    g = json.loads(p.read_text()).get('gaia') or {}
+    return g.get('possible_blends') or []
+
+
+def blend_test(blends, sep_max=BLEND_SEP_ARCSEC, need_max=BLEND_MAX_ECLIPSE):
+    """(is_blend, note): the nearest neighbour closer than sep_max whose eclipse of at most need_max of its own light
+    would give the observed depth."""
+    ok = [b for b in blends if b.get('sep_arcsec') is not None and b['sep_arcsec'] <= sep_max
+          and b.get('eclipse_needed') is not None and b['eclipse_needed'] <= need_max]
+    if not ok:
+        return False, ''
+    b = min(ok, key=lambda x: x['sep_arcsec'])
+    return True, (f"blended eclipsing binary: Gaia DR3 neighbour at {b['sep_arcsec']} arcsec (dG {b['dG']:+.2f}) "
+                  f"gives the depth with a {100 * b['eclipse_needed']:.1f} per cent eclipse")
+
+
+CLASS_PARTS = ('Rp ', 'giant host', 'Gaia ', 'TESS/Kepler depth', 'ZTF', 'APOGEE', 'LAMOST', 'duration ',
+               'too long', 'no stellar radius', 'no transit depth', 'secondary eclipse at', 'odd/even depth',
+               'was ', 'contact or near-contact', 'blended eclipsing')
+
+
+def strip_class(notes):
+    """The vetting notes without the previous class note. The class reason itself contains '; ', so its pieces
+    (and those left by older runs) are dropped by their opening words."""
+    pre = (notes or '').split('class: ')[0]
+    return [n for n in pre.split('; ') if n and not n.startswith(CLASS_PARTS)]
+
+
 GAIA_RADIUS_DEG = 2 / 3600         # brightest Gaia DR3 source within 2 arcsec is the host
 RUWE_MAX = 1.4                      # above this the single-star astrometric fit is poor (unresolved companion)
 P_TOL = 0.02                        # Gaia orbit period agrees with the transit period (or 1/2, 2x) to 2 per cent
@@ -185,12 +242,14 @@ def gaia_dr3(con, tics):
     q = f"""SELECT u.sid, g.phot_g_mean_mag AS gmag, g.ruwe, g.non_single_star, g.rv_amplitude_robust AS rvamp,
         g.rv_chisq_pvalue AS rvp, g.rv_renormalised_gof AS rvgof, g.rv_nb_transits AS rvn,
         o.nss_solution_type AS orb, o.period, o.eccentricity, o.semi_amplitude_primary AS k1,
-        a.nss_solution_type AS acc, e.frequency AS ebfreq
+        a.nss_solution_type AS acc, e.frequency AS ebfreq,
+        p.radius_flame AS rflame, p.radius_gspphot AS rgsp, p.mass_flame AS mflame
         FROM tap_upload.pos AS u JOIN gaiadr3.gaia_source AS g
         ON 1=CONTAINS(POINT(u.ra, u.dec), CIRCLE(g.ra, g.dec, {GAIA_RADIUS_DEG}))
         LEFT JOIN gaiadr3.nss_two_body_orbit AS o ON o.source_id=g.source_id
         LEFT JOIN gaiadr3.nss_acceleration_astro AS a ON a.source_id=g.source_id
-        LEFT JOIN gaiadr3.vari_eclipsing_binary AS e ON e.source_id=g.source_id"""
+        LEFT JOIN gaiadr3.vari_eclipsing_binary AS e ON e.source_id=g.source_id
+        LEFT JOIN gaiadr3.astrophysical_parameters AS p ON p.source_id=g.source_id"""
     try:
         r = Gaia.launch_job_async(q, upload_resource=str(f), upload_table_name='pos').get_results()
     except Exception as e:                       # archive down or overloaded: classify without Gaia
@@ -206,7 +265,8 @@ def gaia_dr3(con, tics):
                                          'rvamp': num(row['rvamp']), 'rvp': num(row['rvp']),
                                          'rvgof': num(row['rvgof']), 'rvn': num(row['rvn']),
                                          'ebper': 1 / num(row['ebfreq']) if num(row['ebfreq']) else None,
-                                         'acc': None if np.ma.is_masked(row['acc']) else str(row['acc'])})
+                                         'acc': None if np.ma.is_masked(row['acc']) else str(row['acc']),
+                                         'rad': num(row['rflame']) or num(row['rgsp']), 'mass': num(row['mflame'])})
     return out
 
 
@@ -354,6 +414,7 @@ def lamost_test(ep, period, m1):
 ZTF_MIN_PPM = 3000                  # ZTF per-point precision (~1 per cent) only tests eclipses deeper than this
 ZTF_BRIGHT = 13.0                   # ZTF saturates for brighter hosts
 ZTF_DILUTION = 1.5                  # ZTF depth this much deeper than the TESS/Kepler depth replaces it for the radius
+ZTF_MIN_IN = 3                      # in-eclipse ZTF epochs needed before a ZTF depth or odd/even test is trusted
 BJD_OFFSET = {'TESS': 2457000.0, 'Kepler': 2454833.0, 'K2': 2454833.0}
 
 
@@ -398,12 +459,19 @@ def ztf_test(lc, mission, period, t0, dur_h, depth_ppm):
     i = int(np.argmax(res.depth_snr))
     if res.depth_snr[i] < 7:
         return False, f'ZTF: eclipse not recovered ({len(t)} epochs)', 0
+    # the box mean can rest on one bad epoch; the median of the in-eclipse epochs must show the same eclipse
+    ph = (t - res.transit_time[i] + 0.5 * res.period[i]) % res.period[i] - 0.5 * res.period[i]
+    inn = np.abs(ph) < dur / 2
+    zmed = 1 - np.median(f[inn]) / np.median(f[~inn]) if inn.sum() else 0.0
+    if inn.sum() < ZTF_MIN_IN or zmed < 0.5 * res.depth[i]:
+        return False, (f'ZTF: eclipse not recovered ({len(t)} epochs, {int(inn.sum())} in eclipse, median depth '
+                       f'{zmed * 1e6:.0f} ppm)'), 0
     st = bls.compute_stats(res.period[i], dur, res.transit_time[i])
     (do, eo), (de, ee) = st['depth_odd'], st['depth_even']
     oe = abs(do - de) / np.hypot(eo, ee) if eo > 0 and ee > 0 else 0
     sd, se = st['depth_phased']
     sec = sd / se if se > 0 else 0
-    zd = res.depth[i] * 1e6
+    zd = zmed * 1e6
     note = f'ZTF depth {zd:.0f} ppm (TESS/Kepler {depth_ppm:.0f}), odd/even {oe:.1f} sigma, secondary {sec:.1f} sigma'
     if oe > OE_SIGMA:
         return True, f'ZTF odd/even depths differ at {oe:.1f} sigma; ' + note, zd
@@ -418,10 +486,12 @@ def ztf_all(pos, cands):
     todo = [t for t, dep in cands if dep and dep >= ZTF_MIN_PPM and t in pos and pos[t][1] > -30]
 
     def one(t):
-        try:
-            return t, ztf_lc(*pos[t])
-        except Exception:
-            return t, None
+        for _ in range(2):                       # a dropped IRSA request must not change the class between runs
+            try:
+                return t, ztf_lc(*pos[t])
+            except Exception:
+                time.sleep(5)
+        return t, None
 
     with ThreadPoolExecutor(8) as ex:
         return {t: lc for t, lc in ex.map(one, todo) if lc is not None}
@@ -450,20 +520,31 @@ def run(status='ready', tics=None, gaia=True, external=True):
     print(f'Gaia {len(gd)}, APOGEE {len(ap)}, LAMOST {len(lm)}, ZTF {len(zl)} hosts matched')
     counts = {}
     for tic, dep, notes, period, t0, dur in rows:
-        zeb, znote, zd = ztf_test(zl.get(tic), sources.mission_of(tic), period, t0, dur, dep or 0)
-        rs = stellar_radius(con, tic)
+        mission = sources.mission_of(tic)
+        zeb, znote, zd = ztf_test(zl.get(tic), mission, period, t0, dur, dep or 0)
+        rs, m1, src = stellar_radius(con, tic), stellar_mass(con, tic), 'TIC v8.2'
+        g = gd.get(tic) or {}
+        if rs is None and g.get('rad'):          # no TIC radius: Gaia DR3 FLAME or GSP-Phot
+            rs, src = g['rad'], 'Gaia DR3'
+            m1 = m1 or g.get('mass')
         dk = zd if dep and zd > ZTF_DILUTION * dep else dep
         if dep and zd > ZTF_DILUTION * dep:      # ZTF's 1 arcsec seeing resolves contaminants that TESS pixels blend
-            t, why = label(zd, rs, *vet_tests(tic))
-            why += f' (ZTF undiluted depth; TESS/Kepler depth {dep:.0f} ppm)'
+            t, why = label(zd, rs, *vet_tests(tic), src=src)
+            why += f' (ZTF undiluted depth, TESS/Kepler depth {dep:.0f} ppm)'
         else:
-            t, why = label(dep, rs, *vet_tests(tic))
-        m1 = stellar_mass(con, tic)
+            t, why = label(dep, rs, *vet_tests(tic), src=src)
+        ceb, cnote = contact_test(dur, period)
+        if ceb and t != 'eclipsing binary':
+            t, why = 'eclipsing binary', f'{cnote}; was {t}: {why}'
         # a planet or brown-dwarf size rests on the catalogued host; a duration the host density cannot produce means
         # that host is not the eclipsed star (or its parameters are wrong), so the size is undetermined
         long_, dnote = duration_test(dur, period, stellar_density(rs, m1), dk or 0)
         if long_ and t in ('planet', 'brown dwarf or low-mass star'):
-            t, why = 'unclassified', f'too long for the host: {dnote}; was {t}: {why}'
+            beb, bnote = blend_test(vet_blends(tic))
+            if beb:                              # the eclipsed star is a resolved neighbour, not the host
+                t, why = 'eclipsing binary', f'{bnote}; too long for the host: {dnote}; was {t}: {why}'
+            else:
+                t, why = 'unclassified', f'too long for the host: {dnote}; was {t}: {why}'
         else:
             why += '; ' + ('too long for the host: ' if long_ else '') + dnote
         tests = [gaia_test(gd.get(tic), period, m1), gaia_rv(gd.get(tic), period, m1),
@@ -473,7 +554,7 @@ def run(status='ready', tics=None, gaia=True, external=True):
                 t, why = 'eclipsing binary', note + '; ' + why
             elif note:
                 why += '; ' + note
-        kept = [n for n in (notes or '').split('; ') if n and not n.startswith('class: ')]
+        kept = strip_class(notes)
         con.execute('UPDATE candidate SET objtype=?, notes=?, updated=? WHERE tic=?',
                     (t, '; '.join(kept + [f'class: {t} ({why})']), time.strftime('%Y-%m-%d %H:%M'), tic))
         counts.setdefault(t, []).append(tic)
