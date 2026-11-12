@@ -71,6 +71,10 @@ def series(author, path):
         return None
     y, _ = lcsearch.detrend(t, f)
     m = np.isfinite(y)
+    # a quarter or sector emptied by the quality cuts (e.g. a Kepler quarter with no good cadences) is skipped,
+    # so that one bad quarter cannot stop the vetting of the whole star
+    if m.sum() < 2:
+        return None
     return t[m], y[m]
 
 

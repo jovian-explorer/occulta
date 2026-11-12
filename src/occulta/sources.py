@@ -98,7 +98,11 @@ def unit_targets(u, kepler_ids=None):
         d = _script_urls(SPOC_SCRIPT.format(s=u - 1000), r'-s\d{4}-(\d{16})-')
         return None if d is None else {int(k): v for k, v in d.items()}
     if 2000 <= u < 3000:
-        d = _script_urls(K2SFF_SCRIPT.format(c=u - 2000), r'lightcurve_(\d+)-c\d+_kepler')
+        c = u - 2000   # split campaigns 91/92, 102, 111/112 live in the c09, c10, c11 scripts
+        d = (_script_urls(K2SFF_SCRIPT.format(c=c // 10), rf'lightcurve_(\d+)-c{c}_kepler') if c >= 90
+             else _script_urls(K2SFF_SCRIPT.format(c=c), r'lightcurve_(\d+)-c\d+_kepler'))
+        if d is not None and c >= 90:   # the bulk script points at /c09/, but MAST stores these files under /c91/ etc.
+            d = {k: v.replace(f'/k2sff/c{c // 10:02d}/', f'/k2sff/c{c}/') for k, v in d.items()}
         return None if d is None else {K2_OFF + k: v for k, v in d.items()}
     # Kepler: every catalogued target is tried; quarters it was not observed in return 404
     return {KEP_OFF + k: None for k in kepler_ids}
