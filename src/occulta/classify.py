@@ -863,6 +863,8 @@ BCG_HOT = (6.000e-02, 6.731e-05, -6.647e-08, 2.859e-11, -7.197e-15)     # 4000-8
 BCG_COOL = (1.749e+00, 1.977e-03, 3.737e-07, -8.966e-11, -4.183e-14)    # 3300-4000 K
 EVOLVED_R_FAC = 1.5                 # radius above 1.5 x the dwarf radius at that Teff: past the main sequence (subgiant/giant)
 GIANT_MASS = (0.8, 3.0)             # mass range of red giants in the APOKASC-2 asteroseismic sample (Pinsonneault et al. 2018)
+R_STAR_MIN = 0.08                   # smallest hydrogen-burning star (R_sun; Dieterich et al. 2014, Chabrier & Baraffe 2000): a
+                                    # parallax radius below it is a white dwarf, or a wrong parallax or Teff
 SPEC_LOGG_GIANT = 3.5               # spectroscopic log g below this marks an evolved star (Huber et al. 2016, EPIC classes)
 SPEC_LOGG_SIG_MAX = 0.3             # spectroscopic log g used only if its error is below this (dex)
 
@@ -1002,6 +1004,12 @@ SEC_WIDTHS = (0.5, 0.75, 1.0, 1.5, 2.0)     # trial secondary durations in units
 SEC_EXCL = 1.0                      # phases within this many T14 of the primary are not searched
 SEC_MIN_ORBITS = 3                  # a secondary must be covered in at least three orbits, each with its own baseline
 SEC_TOP = 50                        # the 50 strongest stacked trials are retested orbit by orbit
+SEC_REFINE = np.arange(0.4, 2.51, 0.05)   # box widths (units of T14) that fix e sin w once a secondary is found: the
+                                    # five SEC_WIDTHS alone quantise (T_sec/T_pri - 1)/(T_sec/T_pri + 1) to 0, +-0.14,
+                                    # +-0.20 and +-0.33 (Winn 2010, eq. 34), which is not a measurement of e sin w
+SEC_BOX_FRAC = 0.7                  # the in-box of a trial of width w is 2 x 0.35 w long: the secondary duration is 0.7 w
+                                    # T14 (the old reading T_sec/T_pri = w overstated it by 1/0.7 and gave e sin w +0.2
+                                    # to a circular orbit)
 SEC_SIGMA_MIN = 10.0                # floor on the detection threshold: the same scan on the inverted light curves of the
                                     # 216 searchable ready candidates of 12 Nov 2026 never passed 9.0 sigma (99th
                                     # percentile 8.0), so a dip above 10 sigma is not noise or systematics at the 1/216
@@ -1055,8 +1063,10 @@ def secondary_scan(T, Y, P, t0, t14_h, depth_ppm, teff=5750.0):
     orbit = np.floor((T - t0) / P).astype(int)
     lo, hi = (SEC_EXCL * t14) / P, 1 - (SEC_EXCL * t14) / P
 
-    def search(Ys):
-        """Best (sigma, phase, width, depth, error, half sigmas, orbits, chi2) of the dips of Ys, and the trial count."""
+    def search(Ys, refine=False):
+        """Best (sigma, phase, width, depth, error, half sigmas, orbits, chi2) of the dips of Ys, and the trial count.
+        With refine, the width of the best trial is replaced by the SEC_REFINE width that maximises the stacked sigma
+        at that phase, and returned as the duration ratio T_sec / T14 = SEC_BOX_FRAC w."""
         trials, n_trials = [], 0
         for wf in SEC_WIDTHS:
             w = wf * t14
@@ -1098,9 +1108,21 @@ def secondary_scan(T, Y, P, t0, t14_h, depth_ppm, teff=5750.0):
                         w2 = 1 / ee ** 2
                         hs.append(float(np.sum(w2 * dd) / np.sqrt(np.sum(w2))))
                 best = (s, c, wf, dep, err, hs, len(ds), chi)
+        if refine and best is not None:
+            top = None
+            for w2 in SEC_REFINE:
+                d = np.abs(ph - best[1]) * P
+                ds, es = per_orbit((d < 0.35 * w2 * t14) & ~prim,
+                                   (d > 0.75 * w2 * t14) & (d < 0.75 * w2 * t14 + 0.5) & ~prim)
+                if len(ds) >= SEC_MIN_ORBITS:
+                    sg = float(np.sum(ds / es ** 2) / np.sqrt(np.sum(1 / es ** 2)))
+                    if top is None or sg > top[0]:
+                        top = (sg, float(w2))
+            if top:
+                best = best[:2] + (SEC_BOX_FRAC * top[1],) + best[3:]
         return best, n_trials, bool(trials)
 
-    best, n_trials, any_ = search(Y)
+    best, n_trials, any_ = search(Y, refine=True)
     if best is None:
         return {'ok': False, 'note': 'secondary scan: no phase covered' if not any_ else
                 f'secondary scan: fewer than {SEC_MIN_ORBITS} orbits cover any trial phase'}
@@ -1272,7 +1294,10 @@ def run(status='ready', tics=None, gaia=True, external=True):
                 rs, src = float(np.median(rsamp)), 'Gaia DR3 parallax'
                 state = host_state(rsamp, teff)
                 hnotes.append(f'host {state or "dwarf or evolved (undecided)"} at Teff {teff:.0f} K')
-                if state == 'dwarf' and not m1:
+                if rs < R_STAR_MIN:              # no main-sequence mass belongs to a radius below the hydrogen-burning limit
+                    hnotes.append(f'host radius {rs:.3f} R_sun is below the smallest star ({R_STAR_MIN} R_sun): white dwarf, '
+                                  f'or a wrong parallax or Teff; no mass assigned')
+                elif state == 'dwarf' and not m1:
                     tt, _, _, mm, _ = ms_dwarfs()
                     m1 = float(np.interp(teff, tt, mm))
         sp = sl.get(tic)
@@ -1290,12 +1315,16 @@ def run(status='ready', tics=None, gaia=True, external=True):
         else:
             t, why = label(dep, rs, *vet_tests(tic), src=src)
         inside = ''
-        if src == 'Gaia DR3 parallax' and dk:
-            r_all = gaia_radius(g, teff, tsig)[0]
-            inside = orbit_inside(r_all, period, m1)
+        giant_cat = src != 'Gaia DR3 parallax' and rs is not None and rs > GIANT_RSUN
+        if (src == 'Gaia DR3 parallax' or giant_cat) and dk:
+            # a catalogue giant has no radius error here: its single radius is tested like the parallax samples
+            r_all = gaia_radius(g, teff, tsig)[0] if src == 'Gaia DR3 parallax' else np.full(N_MC, rs)
+            inside = orbit_inside(r_all, period, m1 if src == 'Gaia DR3 parallax' or (sp and sp[0] < SPEC_LOGG_GIANT) else None)
             if inside:                           # no companion can orbit this star at the period
                 t, why = 'unclassified', f'{inside}: the signal is not from this host; was {t}: {why}'
-            elif t != 'eclipsing binary':        # the class must hold over the radius errors
+            elif src == 'Gaia DR3 parallax' and why.startswith('Rp '):
+                # the size class must hold over the radius errors, for an eclipsing binary as for a planet; a class
+                # from a secondary or odd/even test does not rest on the radius
                 tc = class_from_rp(np.sqrt(dk / 1e6) * r_all / RJ_RSUN)
                 if tc is None:
                     t, why = 'unclassified', f'radius error spans two classes: {why}'

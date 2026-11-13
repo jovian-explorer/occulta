@@ -97,3 +97,34 @@ def test_phase_curve_ellipsoidal_star_and_long_period_skip():
     pc = c.phase_curve(T, Y, P, 0.0, 1.5, 2e4, 1.0)
     assert pc['ok'] and pc['detected'] and pc['stellar'] and abs(pc['ell_ppm'] - 2000) < 100
     assert not c.phase_curve(T, Y, 3.0, 0.0, 3.0, 1e4)['ok']
+
+
+def test_secondary_scan_esinw_is_not_quantised():
+    # the five trial widths alone gave e sin w of only 0, +-0.14, +-0.20 and +-0.33, and a secondary as long as the
+    # primary (circular orbit) came out at +0.2 because the box width was read as the duration ratio
+    grid = [(w - 1) / (w + 1) for w in c.SEC_WIDTHS]
+    T, Y = _lc(sec_phase=0.31, sec_dep=0.003, sec_w=1.25)
+    s = c.secondary_scan(T, Y, 7.3, 0.0, 4.0, 1e4)
+    assert s['detected'] and min(abs(s['esinw'] - g) for g in grid) > 0.01 and 0.1 < s['esinw'] < 0.25
+    T, Y = _lc(sec_phase=0.5, sec_dep=0.003, sec_w=1.0)
+    s = c.secondary_scan(T, Y, 7.3, 0.0, 4.0, 1e4)
+    assert s['detected'] and abs(s['esinw']) < 0.1
+    esw = [c.secondary_scan(*_lc(sec_phase=0.31, sec_dep=0.003, sec_w=w), 7.3, 0.0, 4.0, 1e4)['esinw'] for w in (0.6, 1.0, 1.5)]
+    assert esw[0] < esw[1] < esw[2]
+
+
+def test_size_class_of_a_parallax_host_needs_the_confidence_over_the_radius_errors():
+    # radius 3 R_sun +- 0.9 with depth 7300 ppm: Rp = 1 to 4 R_J, so neither planet nor eclipsing binary holds at 95 per cent
+    r = np.random.default_rng(0).normal(3.0, 0.9, 2000).clip(1.0)
+    assert c.class_from_rp(np.sqrt(7.3e-3) * r / c.RJ_RSUN) is None
+    # TIC 158514824 (R 82-170 R_sun, depth 275 ppm): every sample is above 3 R_J, so the size alone keeps it an eclipsing binary
+    g = {'plx': 2.378, 'plx_e': 0.026, 'gmag': 6.06, 'ag': None}
+    rs = c.gaia_radius(g, 3226.0, 150.0)[0]
+    assert c.class_from_rp(np.sqrt(275.1e-6) * rs / c.RJ_RSUN) == 'eclipsing binary'
+    assert c.orbit_inside(rs, 70.09) == ''                  # 80 per cent at 3 M_sun: below CONF
+    assert 'orbit inside' in c.orbit_inside(rs, 70.09, 1.5)
+
+
+def test_catalogue_giant_orbit_inside():
+    assert 'orbit inside' in c.orbit_inside(np.full(c.N_MC, 119.0), 70.0)
+    assert c.orbit_inside(np.full(c.N_MC, 13.03), 43.87) == ''

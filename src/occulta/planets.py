@@ -30,6 +30,8 @@ HALF_ODD_EVEN_SIGMA = 3.0  # P/2 is kept only if its two parities agree in depth
 V_MIN_CADENCES = 8.0       # the V-shape cut is used only if the transit spans this many median exposures: a rounded (limb-darkened) or timing-smeared transit of fewer cadences always fits as a V
 V_PREFER_SIGMA = 3.0       # V-shape cut: the V (ingress = half the transit) must beat a flat-bottomed transit by this many sigma (delta chi2 = sigma^2) after cadence integration
 SEC_HALF_SIGMA = 2.0       # a secondary eclipse rejects the candidate only if each half of the data (early, late) also shows it at this significance
+RUWE_MAX = 1.4             # Gaia DR3 RUWE above this marks a poor single-star astrometric fit (Lindegren et al. 2021). In a transit host it mostly comes from a wide bound companion, which does not make the transit false (Ziegler et al. 2020; Belokurov et al. 2020), so it is a note that lowers the score, not a rejection; the Gaia orbit, radial-velocity, ZTF and blend tests of classify look for the companion that could be the eclipsed star
+GAIA_TRIES = 3             # the ESA archive often refuses a synchronous job (503, queue full): retry before giving up
 VET_LIMIT_S = 900      # a period search that takes longer marks the candidate vet_error instead of blocking the run
 
 
@@ -186,7 +188,14 @@ def gaia_checks(ra, dec, gaia_id, depth):
         q = f"""SELECT source_id, ra, dec, phot_g_mean_mag, ruwe, non_single_star, phot_variable_flag,
                DISTANCE(POINT({ra},{dec}), POINT(ra,dec))*3600 AS sep
                FROM gaiadr3.gaia_source WHERE 1=CONTAINS(POINT(ra,dec), CIRCLE({ra},{dec},{60/3600}))"""
-        tab = Gaia.launch_job(q).get_results()
+        for i in range(GAIA_TRIES):
+            try:
+                tab = Gaia.launch_job(q).get_results()
+                break
+            except Exception:
+                if i == GAIA_TRIES - 1:
+                    raise
+                time.sleep(10 * (i + 1))
         tab.sort('sep')
         # the TIC's own Gaia identifier names the target (a high-proper-motion star can lie farther away than a neighbour)
         mine = [i for i, sid in enumerate(tab['source_id']) if str(sid) == str(gaia_id)]
@@ -458,6 +467,8 @@ def vet(con, tic, findings):
         shape = t12 / (t14 / 2)
 
         gaia_res = gaia_checks(ra, dec, gaia, dep) if ra is not None else {}
+        if gaia_res.get('error'):    # without Gaia the RUWE, eclipsing-binary and blend tests vanish: never mark such a star ready
+            raise VetTimeout(f'Gaia DR3 query failed, vet again: {gaia_res["error"]}')
 
         # ---- verdict
         reasons = []
@@ -474,7 +485,7 @@ def vet(con, tic, findings):
             if sec_consistent: reasons.append(f'secondary eclipse at {sec_sig:.1f} sigma')
             else: notes.append(f'secondary at {sec_sig:.1f} sigma not confirmed in both halves of the data ({", ".join(f"{h:.1f}" for h in half_sig)} sigma): not used')
         if gaia_res.get('gaia_eb'): reasons.append('Gaia DR3 eclipsing binary')
-        if gaia_res.get('ruwe') and gaia_res['ruwe'] > 1.4: reasons.append(f'Gaia RUWE {gaia_res["ruwe"]:.2f} (unresolved companion)')
+        if gaia_res.get('ruwe') and gaia_res['ruwe'] > RUWE_MAX: notes.append(f'Gaia RUWE {gaia_res["ruwe"]:.2f} (possible unresolved companion)')
         if snr < 10: reasons.append(f'folded SNR only {snr:.1f}')
         steps = sum(st > 0.5 * dep and st > 3 * se for _, _, _, st, se in epochs)
         if epochs and steps >= max(1, len(epochs) / 2):

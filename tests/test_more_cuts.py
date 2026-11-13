@@ -61,13 +61,40 @@ def test_gaia_checks_use_the_tic_gaia_identifier_not_the_nearest_source(monkeypa
     assert planets.gaia_checks(10.0, 20.0, 'None', 0.01)['ruwe'] == 1.0          # no identifier: the nearest source
 
 
-def test_vetting_rejects_a_gaia_eclipsing_binary_and_a_high_ruwe_but_not_ruwe_1_4(tmp_path, monkeypatch):
+def test_vetting_rejects_a_gaia_eclipsing_binary_but_only_notes_a_high_ruwe(tmp_path, monkeypatch):
+    """RUWE above 1.4 in a transit host is mostly a wide bound companion (Ziegler et al. 2020; Belokurov et al. 2020):
+    a note, no rejection."""
     status, _, notes = _vet(tmp_path, monkeypatch, star=SUN, gaia={'gaia_eb': True})
     assert status == 'rejected' and 'Gaia DR3 eclipsing binary' in notes, notes
     status, _, notes = _vet(tmp_path, monkeypatch, star=SUN, gaia={'ruwe': 1.41})
-    assert status == 'rejected' and 'RUWE 1.41' in notes, notes
+    assert status == 'ready' and 'RUWE 1.41' in notes, notes
     status, _, notes = _vet(tmp_path, monkeypatch, star=SUN, gaia={'ruwe': 1.4})
-    assert status == 'ready', notes
+    assert status == 'ready' and 'RUWE' not in notes, notes
+
+
+def test_a_failed_gaia_query_is_not_a_pass(tmp_path, monkeypatch):
+    """A 503 from the archive left 100 of the 287 ready candidates of 13 Nov 2026 without RUWE, eclipsing-binary and blend
+    checks: the star must be vetted again, not marked ready."""
+    status, _, notes = _vet(tmp_path, monkeypatch, star=SUN, gaia={'error': "HTTPError('Error 503')"})
+    assert status == 'vet_error' and 'Gaia DR3 query failed' in notes, notes
+
+
+def test_gaia_checks_retry_a_refused_query(monkeypatch):
+    from occulta import planets
+    _fake_gaia(monkeypatch, [(1, 10.0, 20.0, 10.0, 2.0, 0, 'NOT_AVAILABLE', 0.5)])
+    mod = sys.modules['astroquery.gaia']
+    ok, calls = mod.Gaia.launch_job, []
+
+    def flaky(q):
+        calls.append(q)
+        if len(calls) < 3:
+            raise RuntimeError('Error 503')
+        return ok(q)
+    mod.Gaia.launch_job = staticmethod(flaky)
+    monkeypatch.setattr(planets.time, 'sleep', lambda s: None)
+    assert planets.gaia_checks(10.0, 20.0, '1', 0.05)['ruwe'] == 2.0
+    mod.Gaia.launch_job = staticmethod(lambda q: (_ for _ in ()).throw(RuntimeError('Error 503')))
+    assert 'error' in planets.gaia_checks(10.0, 20.0, '1', 0.05)
 
 
 def test_vetting_rejects_a_signal_shared_with_another_candidate_within_the_tolerance(tmp_path, monkeypatch):
