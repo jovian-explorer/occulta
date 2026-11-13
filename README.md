@@ -130,6 +130,15 @@ Every command works inside one working directory, which holds the database of th
 
 ---
 
+## Release history
+
+Dates are in UTC and are taken from the git history, the GitHub releases and the Zenodo archive of each version.
+
+| Date | Event |
+|---|---|
+| 25 October 2026 | Development began, and the GitHub repository was created as a public repository. |
+| 25 October 2026 | Version 0.0.1, the first public pre-release ([10.5281/zenodo.23634487](https://doi.org/10.5281/zenodo.23634487)). |
+
 ## Licence
 
 occulta is free software under the MIT licence (`LICENSE`).
