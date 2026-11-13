@@ -252,7 +252,7 @@ def gaia_dr3(con, tics):
         o.nss_solution_type AS orb, o.period, o.eccentricity, o.semi_amplitude_primary AS k1,
         a.nss_solution_type AS acc, e.frequency AS ebfreq,
         p.radius_flame AS rflame, p.radius_gspphot AS rgsp, p.mass_flame AS mflame,
-        g.bp_rp, p.teff_gspphot AS tgsp
+        g.bp_rp, p.teff_gspphot AS tgsp, g.parallax AS plx, g.parallax_error AS plxe, p.ag_gspphot AS ag
         FROM tap_upload.pos AS u JOIN gaiadr3.gaia_source AS g
         ON 1=CONTAINS(POINT(u.ra, u.dec), CIRCLE(g.ra, g.dec, {GAIA_RADIUS_DEG}))
         LEFT JOIN gaiadr3.nss_two_body_orbit AS o ON o.source_id=g.source_id
@@ -276,7 +276,9 @@ def gaia_dr3(con, tics):
                                          'ebper': 1 / num(row['ebfreq']) if num(row['ebfreq']) else None,
                                          'acc': None if np.ma.is_masked(row['acc']) else str(row['acc']),
                                          'rad': num(row['rflame']) or num(row['rgsp']), 'mass': num(row['mflame']),
-                                         'bp_rp': num(row['bp_rp']), 'teff': num(row['tgsp'])})
+                                         'bp_rp': num(row['bp_rp']), 'teff': num(row['tgsp']),
+                                         'gmag': num(row['gmag']), 'plx': num(row['plx']), 'plx_e': num(row['plxe']),
+                                         'ag': num(row['ag'])})
     return out
 
 
@@ -787,9 +789,29 @@ def stellar_teff(con, tic):
     return r[0] if r and r[0] and r[0] > 0 else None
 
 
-def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None):
-    """(class or None, note) from the transit-shape fit of one undetermined signal: with the catalogue density when
-    the host has one (signal too long), from the dwarf sequence when it has no radius."""
+def shape_evolved(fit, rsamp, seed=2):
+    """(class or None, note) for an evolved host with a Gaia parallax radius but no mass: the fitted density must lie
+    within what GIANT_MASS allows at that radius (an eclipse of a still larger star below it), and Rp = k R_star from
+    the bootstrap k times the radius samples gives the class."""
+    rng = np.random.default_rng(seed)
+    r = rng.choice(np.asarray(rsamp), len(fit['k']))
+    note = f"shape fit: rho_LC {_ci(fit['rho'])} g/cc, b {_ci(fit['b'])}, k {_ci(fit['k'])}"
+    rho_lo = 1.40980 * GIANT_MASS[0] / r ** 3
+    low = np.mean(fit['rho'] < RHO_EB_RATIO * rho_lo)
+    if low >= CONF:
+        return 'eclipsing binary', (f'eclipsed star less dense than an evolved host of {GIANT_MASS[0]}-{GIANT_MASS[1]} M_sun '
+                                    f'allows with e < {ECC_MAX} ({100 * low:.0f} per cent of fits); {note}')
+    rp = fit['k'] * r / RJ_RSUN
+    t = class_from_rp(rp)
+    if t:
+        return t, f'Rp {_ci(rp)} R_J = k x Gaia parallax radius; {note}'
+    return None, f'Rp {_ci(rp)} R_J (k x Gaia parallax radius) spans two classes; {note}'
+
+
+def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None, rsamp=None):
+    """(class or None, note) from the transit-shape fit of one undetermined signal: with the host density when it
+    has one, with the Gaia parallax radius (rsamp) of an evolved host of unknown mass, and from the dwarf sequence
+    when it has no radius."""
     w = load_windows(tic)
     if w is None:
         return None, 'shape fit: no transit windows'
@@ -798,13 +820,11 @@ def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None):
     t, f, period, t0 = w
     band = 'TESS' if sources.mission_of(tic) == 'TESS' else 'Kepler'
     rho_cat = stellar_density(rs, m1)
-    teff, tsrc = stellar_teff(con, tic), 'catalogue'
-    if teff is None and g.get('teff'):
-        teff, tsrc = g['teff'], 'Gaia DR3 GSP-Phot'
-    if teff is None and ms_teff(g.get('bp_rp')):
-        teff, tsrc = ms_teff(g['bp_rp']), 'Gaia Bp-Rp on the dwarf sequence'
+    teff, tsrc, _ = host_teff(con, tic, g)
     if rho_cat:
         logg = 4.438 + np.log10(m1 / rs ** 2)
+    elif rsamp is not None:
+        logg = 4.438 + np.log10(np.sqrt(np.prod(GIANT_MASS)) / np.median(rsamp) ** 2)
     elif teff:
         tt, _, r, m, _ = ms_dwarfs()
         logg = 4.438 + np.log10(np.interp(teff, tt, m) / np.interp(teff, tt, r) ** 2)
@@ -817,6 +837,8 @@ def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None):
     lnote = f' (u {u[0]:.2f}, {u[1]:.2f})'
     if rho_cat:
         c, n = shape_long(fit, rho_cat, rs)
+    elif rsamp is not None:
+        c, n = shape_evolved(fit, rsamp)
     else:
         c, n, _ = shape_norad(fit, teff, tsrc)
     return c, n + lnote
@@ -826,6 +848,391 @@ def stellar_mass(con, tic):
     r = con.execute('SELECT mass FROM tic WHERE tic=?' if sources.mission_of(tic) == 'TESS'
                     else 'SELECT mass FROM star WHERE sid=?', (tic,)).fetchone()
     return r[0] if r and r[0] and r[0] > 0 else None
+
+
+# ---- host radius from the Gaia DR3 parallax (Stefan-Boltzmann law), for hosts without a catalogue radius
+PLX_SNR_MIN = 5.0                   # parallax / error: below this the inverse parallax is a biased distance (Bailer-Jones 2015)
+PLX_ZP_MAS = -0.017                 # mean Gaia (E)DR3 parallax zero-point, subtracted (Lindegren et al. 2021)
+MBOL_SUN = 4.74                     # IAU 2015 Resolution B2 (Mamajek et al. 2015)
+TEFF_SIG_CAT, TEFF_SIG_COL = 150.0, 250.0   # Teff error (K): catalogue or GSP-Phot; dwarf-sequence colour (dwarf/giant offset)
+BC_SIG, BC_SIG_EDGE = 0.10, 0.30    # BC_G error inside the 3300-8000 K validity range of the fit, and when clipped to it
+AG_SIG = 0.10                       # extinction error (mag) when GSP-Phot gives A_G
+N_MC = 2000
+# BC_G(Teff) = sum a_i (Teff - 5772 K)^i (Andrae et al. 2018, eq. 7 and Table 8; also used by Gaia DR3 FLAME)
+BCG_HOT = (6.000e-02, 6.731e-05, -6.647e-08, 2.859e-11, -7.197e-15)     # 4000-8000 K
+BCG_COOL = (1.749e+00, 1.977e-03, 3.737e-07, -8.966e-11, -4.183e-14)    # 3300-4000 K
+EVOLVED_R_FAC = 1.5                 # radius above 1.5 x the dwarf radius at that Teff: past the main sequence (subgiant/giant)
+GIANT_MASS = (0.8, 3.0)             # mass range of red giants in the APOKASC-2 asteroseismic sample (Pinsonneault et al. 2018)
+SPEC_LOGG_GIANT = 3.5               # spectroscopic log g below this marks an evolved star (Huber et al. 2016, EPIC classes)
+SPEC_LOGG_SIG_MAX = 0.3             # spectroscopic log g used only if its error is below this (dex)
+
+
+def bc_g(teff):
+    """Gaia G-band bolometric correction at Teff, clipped to the 3300-8000 K range of the Andrae et al. (2018) fit."""
+    t = np.clip(np.asarray(teff, float), 3300.0, 8000.0)
+    x = t - 5772.0
+    hot = sum(a * x ** i for i, a in enumerate(BCG_HOT))
+    cool = sum(a * x ** i for i, a in enumerate(BCG_COOL))
+    return np.where(t >= 4000.0, hot, cool)
+
+
+def host_teff(con, tic, g):
+    """(Teff, source, error) of the host: catalogue, Gaia DR3 GSP-Phot, or Gaia Bp-Rp on the dwarf sequence."""
+    teff = stellar_teff(con, tic)
+    if teff:
+        return teff, 'catalogue', TEFF_SIG_CAT
+    if g and g.get('teff'):
+        return g['teff'], 'Gaia DR3 GSP-Phot', TEFF_SIG_CAT
+    c = ms_teff(g.get('bp_rp')) if g else None
+    if c:
+        return c, 'Gaia Bp-Rp on the dwarf sequence', TEFF_SIG_COL
+    return None, '', None
+
+
+def gaia_radius(g, teff, tsig, n=N_MC, seed=1):
+    """(radius samples in R_sun or None, note) from L = 4 pi R^2 sigma Teff^4 with the luminosity from the Gaia G
+    magnitude, the zero-point-corrected parallax, the GSP-Phot extinction (none when missing, so R is then a lower
+    limit) and BC_G(Teff); Monte Carlo over parallax, Teff, A_G and BC_G errors."""
+    if not g or teff is None:
+        return None, 'no Gaia parallax radius: no Teff or Gaia colour'
+    plx, e, gm = g.get('plx'), g.get('plx_e'), g.get('gmag')
+    if plx is None or not e or gm is None:
+        return None, 'no Gaia parallax radius: no parallax or G magnitude'
+    p = plx - PLX_ZP_MAS
+    if p / e < PLX_SNR_MIN:
+        return None, f'no Gaia parallax radius: parallax/error {p / e:.1f} below {PLX_SNR_MIN:g}'
+    rng = np.random.default_rng(seed)
+    ps = rng.normal(p, e, n)
+    ts = rng.normal(teff, tsig, n)
+    ok = (ps > 0) & (ts > 2000)
+    ps, ts = ps[ok], ts[ok]
+    ag = g.get('ag')
+    ags = np.clip(rng.normal(ag, AG_SIG, len(ps)), 0, None) if ag is not None else np.zeros(len(ps))
+    inside = 3300.0 <= teff <= 8000.0
+    bc = bc_g(ts) + rng.normal(0, BC_SIG if inside else BC_SIG_EDGE, len(ps))
+    mbol = gm + 5 * np.log10(ps) - 10 - ags + bc
+    r = np.sqrt(10 ** (-0.4 * (mbol - MBOL_SUN))) * (5772.0 / ts) ** 2
+    note = (f'Gaia DR3 parallax radius {_ci(r)} R_sun (plx {p:.3f}+-{e:.3f} mas, G {gm:.2f}, '
+            f'A_G {ag if ag is not None else 0:.2f}{"" if ag is not None else " assumed: R is a lower limit"}, '
+            f'Teff {teff:.0f}+-{tsig:.0f} K{"" if inside else ", BC_G clipped at the fit range"})')
+    return r, note
+
+
+def host_state(rs, teff):
+    """'dwarf', 'evolved' or None: CONF of the radius samples below or above EVOLVED_R_FAC x the dwarf radius at Teff."""
+    if rs is None or teff is None:
+        return None
+    t, _, r, _, _ = ms_dwarfs()
+    rms = float(np.interp(teff, t, r))
+    up = np.mean(np.asarray(rs) > EVOLVED_R_FAC * rms)
+    return 'evolved' if up >= CONF else 'dwarf' if up <= 1 - CONF else None
+
+
+def orbit_inside(rs, period, m1=None):
+    """Note when CONF of the radius samples exceed the semi-major axis at the period for the largest mass allowed
+    (m1, else the top of GIANT_MASS): a companion would orbit inside the star (Kepler's third law), so the signal
+    cannot be an eclipse of, or a transit across, this host. '' otherwise."""
+    if rs is None or not period:
+        return ''
+    m = m1 or GIANT_MASS[1]
+    a_rsun = (m * (period / 365.25) ** 2) ** (1 / 3) * 215.03     # 1 au = 215.03 R_sun
+    f = np.mean(np.asarray(rs) > a_rsun)
+    if f < CONF:
+        return ''
+    return (f'orbit inside the host: a = {a_rsun:.0f} R_sun at P {period:.2f} d for {m:.1f} M_sun, '
+            f'R_star {_ci(rs)} R_sun')
+
+
+def spec_logg(pos):
+    """{tic: (log g, error, survey)} from APOGEE DR17 (III/286) or GALAH DR3 (J/MNRAS/506/150), nearest entry within
+    2 arcsec, read from the CfA VizieR mirror."""
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+    url = 'https://vizier.cfa.harvard.edu/viz-bin/asu-tsv'
+    cats = (('III/286/catalog', 'logg,e_logg', 'APOGEE DR17'), ('J/MNRAS/506/150/stars', 'logg', 'GALAH DR3'))
+
+    def one(item):
+        t, (ra, dec) = item
+        for src, cols, name in cats:
+            try:
+                txt = requests.get(url, params={'-source': src, '-c': f'{ra} {dec}', '-c.rs': 2, '-out': cols,
+                                                '-sort': '_r', '-out.max': 1}, timeout=60).text
+            except Exception:
+                continue
+            for line in txt.splitlines():
+                p = line.split('\t')
+                if line.startswith('#') or not p[0].strip():
+                    continue
+                try:
+                    lg = float(p[0])
+                    el = float(p[1]) if len(p) > 1 and p[1].strip() else 0.2   # GALAH DR3 typical log g error
+                except ValueError:
+                    continue
+                return t, (lg, el, name)
+        return t, None
+
+    with ThreadPoolExecutor(8) as ex:
+        return {t: v for t, v in ex.map(one, pos.items()) if v}
+
+
+def spec_mass(logg, rstar):
+    """Mass (M_sun) from a spectroscopic log g and a radius: M = g R^2 / G, log g_sun = 4.438."""
+    if logg is None or not rstar:
+        return None
+    return float(10 ** (logg - 4.438) * rstar ** 2)
+
+
+# ---- eccentric orbit from a secondary eclipse (Winn 2010, eqs. 33-34; Kipping 2010)
+def ecc_from_secondary(phase, dur_ratio):
+    """(e cos w, e sin w, e) from the secondary phase (primary at 0) and T_sec / T_pri, to first order in e."""
+    ecw = np.pi / 2 * (phase - 0.5)
+    esw = (dur_ratio - 1) / (dur_ratio + 1)
+    return ecw, esw, float(min(np.hypot(ecw, esw), 0.95))
+
+
+def rho_ecc_factor(esw, e):
+    """rho_circ / rho_true = ((1 + e sin w) / sqrt(1 - e^2))^3: a circular fit to an eccentric transit misreads the
+    stellar density by this factor (Kipping 2010; Dawson & Johnson 2012)."""
+    return ((1 + esw) / np.sqrt(1 - e ** 2)) ** 3
+
+
+# ---- secondary eclipse at any phase and phase curve, from the full light curve (occulta classify --lc)
+SEC_FAP = 0.01                      # false-alarm probability of the strongest dip over all trial phases and widths
+SEC_WIDTHS = (0.5, 0.75, 1.0, 1.5, 2.0)     # trial secondary durations in units of the primary T14 (e sin w up to ~0.33)
+SEC_EXCL = 1.0                      # phases within this many T14 of the primary are not searched
+SEC_MIN_ORBITS = 3                  # a secondary must be covered in at least three orbits, each with its own baseline
+SEC_TOP = 50                        # the 50 strongest stacked trials are retested orbit by orbit
+SEC_SIGMA_MIN = 10.0                # floor on the detection threshold: the same scan on the inverted light curves of the
+                                    # 216 searchable ready candidates of 12 Nov 2026 never passed 9.0 sigma (99th
+                                    # percentile 8.0), so a dip above 10 sigma is not noise or systematics at the 1/216
+                                    # level (inverted-light-curve calibration as in Kepler DR25, Thompson et al. 2018)
+ELL_P_MAX = 1.0                     # ellipsoidal test only below this period (d): the 2 d running-median detrending
+                                    # keeps a P/2 harmonic only when P/2 is at most a quarter of its window
+ELL_ALPHA = 1.37                    # ellipsoidal coefficient 0.15 (15 + u)(1 + tau) / (3 - u), u 0.6, tau 0.4
+                                    # (Morris & Naftilan 1993; Shporer 2017)
+ELL_SIGMA = 5.0                     # ellipsoidal amplitude must exceed this many (red-noise-inflated) sigma
+
+
+def _planck_ratio(t1, t2, lam_m=8.0e-7):
+    """B_lambda(t1) / B_lambda(t2) at the centre of the TESS and Kepler bands (~0.8 and ~0.65 micron)."""
+    c2 = 1.4388e-2 / lam_m
+    return np.expm1(c2 / t2) / np.expm1(c2 / t1)
+
+
+def occultation_max(k, ar, teff):
+    """Deepest occultation (secondary) a planet can make: full reflection (geometric albedo 1) plus thermal emission
+    at the hottest dayside temperature, no redistribution and zero Bond albedo, T_d = Teff sqrt(R/a) (2/3)^(1/4)
+    (Cowan & Agol 2011). Anything deeper is the eclipse of a luminous companion."""
+    td = teff * np.sqrt(1 / ar) * (2 / 3) ** 0.25
+    return k ** 2 * (1 / ar ** 2 + _planck_ratio(td, teff))
+
+
+def _beta(res, n_in):
+    """Red-noise factor (Pont et al. 2006): scatter of means of n_in points over the white-noise expectation."""
+    n_in = max(int(n_in), 1)
+    nb = len(res) // n_in
+    if nb < 5 or n_in < 2:
+        return 1.0
+    m = res[:nb * n_in].reshape(nb, n_in).mean(axis=1)
+    return max(1.0, float(np.std(m) / (np.std(res) / np.sqrt(n_in))))
+
+
+def secondary_scan(T, Y, P, t0, t14_h, depth_ppm, teff=5750.0):
+    """Strongest box dip away from the primary over trial phases (step T14/4) and widths SEC_WIDTHS x T14. The local
+    baseline flanks each box; errors carry a red-noise factor. Detection: false-alarm probability below SEC_FAP after
+    all trials (Bonferroni), both halves of the data above SEC_HALF_SIGMA. A detected dip deeper than a planet's
+    largest occultation is a stellar eclipse."""
+    from scipy.stats import norm
+    T, Y = np.asarray(T, float), np.asarray(Y, float)
+    t14 = t14_h / 24
+    ph = ((T - t0) / P) % 1
+    prim = (np.minimum(ph, 1 - ph) * P) < SEC_EXCL * t14
+    base = Y[~prim]
+    sig0 = 1.4826 * np.median(np.abs(base - np.median(base)))
+    beta = _beta(base - np.median(base), max(2, int(np.sum(np.abs(((T - t0) / P + 0.5) % 1 - 0.5) * P < t14 / 2)
+                                                    / max(1, len(np.unique(np.round((T - t0) / P)))))))
+    half = T < np.median(T)
+    orbit = np.floor((T - t0) / P).astype(int)
+    lo, hi = (SEC_EXCL * t14) / P, 1 - (SEC_EXCL * t14) / P
+
+    def search(Ys):
+        """Best (sigma, phase, width, depth, error, half sigmas, orbits, chi2) of the dips of Ys, and the trial count."""
+        trials, n_trials = [], 0
+        for wf in SEC_WIDTHS:
+            w = wf * t14
+            for c in np.arange(lo + w / (2 * P), hi - w / (2 * P), t14 / (4 * P)):
+                n_trials += 1
+                d = np.abs(ph - c) * P
+                inn = (d < 0.35 * w) & ~prim
+                out = (d > 0.75 * w) & (d < 0.75 * w + 0.5) & ~prim
+                if inn.sum() < 4 or out.sum() < 10:
+                    continue
+                dep = np.median(Ys[out]) - np.mean(Ys[inn])
+                trials.append((dep / (beta * sig0 / np.sqrt(inn.sum())), c, wf, inn, out))
+
+        def per_orbit(inn, out):
+            """Depth of each orbit with its own in-box and flanking points: a real eclipse recurs in every orbit, a
+            single event (systematic, flare, a neighbour's lone eclipse) does not."""
+            ds, es = [], []
+            for n in np.unique(orbit[inn]):
+                i2, o2 = inn & (orbit == n), out & (orbit == n)
+                if i2.sum() >= 3 and o2.sum() >= 6:
+                    ds.append(np.median(Ys[o2]) - np.mean(Ys[i2])); es.append(beta * sig0 / np.sqrt(i2.sum()))
+            return np.array(ds), np.array(es)
+
+        best = None
+        for _, c, wf, inn, out in sorted(trials, key=lambda x: -x[0])[:SEC_TOP]:
+            ds, es = per_orbit(inn, out)
+            if len(ds) < SEC_MIN_ORBITS:
+                continue
+            wt = 1 / es ** 2
+            dep = float(np.sum(wt * ds) / np.sum(wt))
+            chi = float(np.sum(wt * (ds - dep) ** 2) / (len(ds) - 1))
+            err = float(np.sqrt(max(chi, 1.0) / np.sum(wt)))     # scatter between orbits inflates the error
+            s = dep / err
+            if best is None or s > best[0]:
+                hs = []
+                for hm in (half, ~half):
+                    dd, ee = per_orbit(inn & hm, out & hm)
+                    if len(dd):
+                        w2 = 1 / ee ** 2
+                        hs.append(float(np.sum(w2 * dd) / np.sqrt(np.sum(w2))))
+                best = (s, c, wf, dep, err, hs, len(ds), chi)
+        return best, n_trials, bool(trials)
+
+    best, n_trials, any_ = search(Y)
+    if best is None:
+        return {'ok': False, 'note': 'secondary scan: no phase covered' if not any_ else
+                f'secondary scan: fewer than {SEC_MIN_ORBITS} orbits cover any trial phase'}
+    # the same search on the inverted light curve: its strongest "dip" (a brightening) measures how often noise and
+    # systematics alone pass, as with the inverted light curves of Kepler DR25 (Thompson et al. 2018)
+    inv = search(-Y)[0]
+    s_inv = float(inv[0]) if inv else 0.0
+    s, c, wf, dep, err, hs, n_orb, chi = best
+    thr = max(float(norm.isf(SEC_FAP / max(n_trials, 1))), SEC_SIGMA_MIN)
+    k = np.sqrt(max(depth_ppm, 1.0) / 1e6)
+    ar = P / (np.pi * t14) * (1 + k)
+    dmax = float(occultation_max(k, ar, teff or 5750.0))
+    det = bool(s > thr and s > s_inv and len(hs) == 2 and min(hs) > 2.0)
+    ecw, esw, e = ecc_from_secondary(c, wf)
+    return {'ok': True, 'sigma': float(s), 'sigma_inv': s_inv, 'threshold': thr, 'phase': float(c),
+            'width_ratio': float(wf), 'depth_ppm': float(dep * 1e6), 'err_ppm': float(err * 1e6),
+            'halves': [float(h) for h in hs], 'detected': det, 'stellar': bool(det and dep > dmax),
+            'occ_max_ppm': dmax * 1e6, 'beta': beta, 'n_trials': n_trials, 'n_orbits': n_orb, 'chi2_orbits': chi,
+            'ecosw': float(ecw), 'esinw': float(esw), 'ecc': e}
+
+
+def phase_curve(T, Y, P, t0, t14_h, depth_ppm, m1=1.0):
+    """Ellipsoidal, reflection and beaming harmonics out of eclipse, y = c + a1 cos(2 pi phi) + b1 sin(2 pi phi) +
+    a2 cos(4 pi phi), for P <= ELL_P_MAX. The ellipsoidal amplitude -a2 gives q = A / (ELL_ALPHA (R/a)^3) at sin i ~ 1
+    (Shporer 2017, eq. 6); a companion above MSTAR_MIN is a star."""
+    if P > ELL_P_MAX:
+        return {'ok': False, 'note': f'phase curve: P {P:.2f} d above {ELL_P_MAX:g} d (detrending removes it)'}
+    T, Y = np.asarray(T, float), np.asarray(Y, float)
+    t14 = t14_h / 24
+    ph = ((T - t0) / P) % 1
+    m = (np.minimum(ph, 1 - ph) * P > t14) & (np.abs(ph - 0.5) * P > t14)
+    if m.sum() < 50:
+        return {'ok': False, 'note': 'phase curve: too few points'}
+    x = 2 * np.pi * ph[m]
+    A = np.c_[np.ones(m.sum()), np.cos(x), np.sin(x), np.cos(2 * x)]
+    coef, *_ = np.linalg.lstsq(A, Y[m], rcond=None)
+    res = Y[m] - A @ coef
+    cov = np.linalg.inv(A.T @ A) * np.var(res) * _beta(res, max(2, int(0.1 * P / np.median(np.diff(T)))) ) ** 2
+    a_ell, e_ell = float(-coef[3]), float(np.sqrt(cov[3, 3]))
+    k = np.sqrt(max(depth_ppm, 1.0) / 1e6)
+    ar = P / (np.pi * t14) * (1 + k)
+    q = a_ell / (ELL_ALPHA * ar ** -3)
+    m2 = q * (m1 or 1.0)
+    det = a_ell > ELL_SIGMA * e_ell
+    return {'ok': True, 'ell_ppm': a_ell * 1e6, 'ell_err_ppm': e_ell * 1e6, 'refl_ppm': float(-coef[1] * 1e6),
+            'beam_ppm': float(coef[2] * 1e6), 'q': float(q), 'm2': float(m2), 'detected': bool(det),
+            'stellar': bool(det and m2 > MSTAR_MIN)}
+
+
+def lc_checks(tics=None, status='ready', keep=False):
+    """Download the full light curves of the candidates, run secondary_scan and phase_curve on the detrended
+    series of the vetting, and store both in summary.json (keys secondary_any, phase_curve). Nothing else changes."""
+    import shutil
+    from . import planets
+    con = survey.db()
+    rows = con.execute('SELECT tic, period, t0, dur_h, depth_ppm FROM candidate WHERE status=?', (status,)).fetchall()
+    if tics:
+        rows = [r for r in rows if r[0] in set(tics)]
+    for tic, P, t0, dur, dep in rows:
+        p = survey.FIND / sources.name_of(tic).replace(' ', '') / 'summary.json'
+        if not p.exists():
+            print(tic, 'no summary.json'); continue
+        s = json.loads(p.read_text())
+        P, t0 = s.get('period_d') or P, s.get('t0_bjd') or t0
+        t14, dep = s.get('t14_h') or dur, s.get('depth_ppm') or dep
+        work = survey.CACHE / f'cls_{tic}'
+        work.mkdir(parents=True, exist_ok=True)
+        try:
+            cached = work / 'series.npz'
+            if cached.exists():                  # detrended series of an earlier --keep run
+                z = np.load(cached)
+                T, Y = z['T'], z['Y']
+            else:
+                data = {}
+                for author, unit, path in planets.fetch_all(tic, work):
+                    ser = planets.series(author, path)
+                    if ser is not None:
+                        data.setdefault(unit, {})[author] = ser
+                main = [(d.get('QLP') or d.get('TESS-SPOC') or d.get('SPOC') or d.get('Kepler') or d.get('K2SFF'))
+                        for d in data.values()]
+                main = [m for m in main if m is not None]
+                if not main:
+                    raise RuntimeError('no light curves')
+                T = np.concatenate([m[0] for m in main]); Y = np.concatenate([m[1] for m in main])
+                o = np.argsort(T); T, Y = T[o], Y[o]
+                if keep:
+                    np.savez_compressed(cached, T=T, Y=Y)
+            t0b = t0 - planets.BTJD if t0 > 2e6 else t0
+            teff = stellar_teff(con, tic) or 5750.0
+            s['secondary_any'] = secondary_scan(T, Y, P, t0b, t14, dep, teff)
+            s['phase_curve'] = phase_curve(T, Y, P, t0b, t14, dep, stellar_mass(con, tic) or 1.0)
+            print(tic, 'secondary', round(s['secondary_any'].get('sigma', np.nan), 1), s['secondary_any'].get('detected'),
+                  'ell', s['phase_curve'].get('detected'))
+        except Exception as e:
+            s['secondary_any'] = {'ok': False, 'note': f'secondary scan failed: {e}'}
+            print(tic, 'failed', e)
+        p.write_text(json.dumps(s, indent=1, default=float))
+        if not keep:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def lc_tests(tic):
+    """(secondary_any, phase_curve) dicts from the vetting summary, {} when lc_checks has not run."""
+    p = survey.FIND / sources.name_of(tic).replace(' ', '') / 'summary.json'
+    if not p.exists():
+        return {}, {}
+    s = json.loads(p.read_text())
+    return s.get('secondary_any') or {}, s.get('phase_curve') or {}
+
+
+def lc_test(sa, pc):
+    """(is_binary, note) from the any-phase secondary and the ellipsoidal variation."""
+    notes = []
+    if sa.get('ok'):
+        # results stored by an older run are held to the present floor
+        sa = {**sa, 'detected': bool(sa.get('detected') and sa['sigma'] > SEC_SIGMA_MIN),
+              'threshold': max(sa['threshold'], SEC_SIGMA_MIN)}
+        sa['stellar'] = bool(sa['detected'] and sa['depth_ppm'] > sa['occ_max_ppm'])
+        if sa.get('stellar'):
+            return True, (f"secondary eclipse at phase {sa['phase']:.3f} ({sa['sigma']:.1f} sigma, threshold "
+                          f"{sa['threshold']:.1f}; {sa['depth_ppm']:.0f} ppm, above the {sa['occ_max_ppm']:.0f} ppm a planet "
+                          f"can occult; e cos w {sa['ecosw']:+.2f}, e sin w {sa['esinw']:+.2f})")
+        if sa.get('detected'):
+            notes.append(f"occultation-depth dip at phase {sa['phase']:.3f} ({sa['depth_ppm']:.0f} ppm, {sa['sigma']:.1f} sigma)")
+        else:
+            notes.append(f"no secondary at any phase (best {sa['sigma']:.1f} sigma, threshold {sa['threshold']:.1f})")
+    if pc.get('ok'):
+        if pc.get('stellar'):
+            return True, (f"ellipsoidal variation {pc['ell_ppm']:.0f}+-{pc['ell_err_ppm']:.0f} ppm, companion "
+                          f"{pc['m2']:.2f} M_sun")
+        notes.append(f"ellipsoidal {pc['ell_ppm']:.0f}+-{pc['ell_err_ppm']:.0f} ppm (M2 < {MSTAR_MIN} M_sun or not detected)")
+    return False, '; '.join(notes)
 
 
 def run(status='ready', tics=None, gaia=True, external=True):
@@ -839,31 +1246,76 @@ def run(status='ready', tics=None, gaia=True, external=True):
     fill_tic(con, [r[0] for r in rows if stellar_radius(con, r[0]) is None])
     pos = positions(con, [r[0] for r in rows])
     gd = gaia_dr3(con, [r[0] for r in rows]) if gaia else {}
+    if gaia and pos and not gd:
+        # without Gaia the orbit, RV and eclipsing-binary tests vanish and binaries fall back to planets: write nothing
+        raise RuntimeError('Gaia DR3 cross-match failed or matched no host; no class written (retry, or --no-gaia)')
     ap = apogee(pos) if external else {}
     lm = lamost(pos) if external else {}
     zl = ztf_all(pos, [(r[0], r[1]) for r in rows]) if external else {}
-    print(f'Gaia {len(gd)}, APOGEE {len(ap)}, LAMOST {len(lm)}, ZTF {len(zl)} hosts matched')
+    sl = spec_logg(pos) if external else {}
+    print(f'Gaia {len(gd)}, APOGEE {len(ap)}, LAMOST {len(lm)}, ZTF {len(zl)}, spectroscopic log g {len(sl)} hosts matched')
     counts = {}
     for tic, dep, notes, period, t0, dur, snr in rows:
         mission = sources.mission_of(tic)
         zeb, znote, zd = ztf_test(zl.get(tic), mission, period, t0, dur, dep or 0)
         rs, m1, src = stellar_radius(con, tic), stellar_mass(con, tic), 'TIC v8.2'
         g = gd.get(tic) or {}
+        hnotes, rsamp = [], None
         if rs is None and g.get('rad'):          # no TIC radius: Gaia DR3 FLAME or GSP-Phot
             rs, src = g['rad'], 'Gaia DR3'
             m1 = m1 or g.get('mass')
+        teff, _, tsig = host_teff(con, tic, g)
+        if rs is None:                           # nor FLAME/GSP-Phot: luminosity radius from the parallax
+            rsamp, rnote = gaia_radius(g, teff, tsig)
+            hnotes.append(rnote)
+            if rsamp is not None:
+                rs, src = float(np.median(rsamp)), 'Gaia DR3 parallax'
+                state = host_state(rsamp, teff)
+                hnotes.append(f'host {state or "dwarf or evolved (undecided)"} at Teff {teff:.0f} K')
+                if state == 'dwarf' and not m1:
+                    tt, _, _, mm, _ = ms_dwarfs()
+                    m1 = float(np.interp(teff, tt, mm))
+        sp = sl.get(tic)
+        if sp and sp[1] <= SPEC_LOGG_SIG_MAX and rs:
+            ms = spec_mass(sp[0], rs)
+            hnotes.append(f'{sp[2]} log g {sp[0]:.2f}+-{sp[1]:.2f}, mass g R^2/G {ms:.2f} M_sun')
+            if not m1 or sp[0] < SPEC_LOGG_GIANT:   # TIC masses come from dwarf relations: wrong for evolved hosts
+                m1 = ms
+        if rsamp is not None and m1:
+            rsamp = None                         # mass known: the density tests below apply as for catalogue hosts
         dk = zd if dep and zd > ZTF_DILUTION * dep else dep
         if dep and zd > ZTF_DILUTION * dep:      # ZTF's 1 arcsec seeing resolves contaminants that TESS pixels blend
             t, why = label(zd, rs, *vet_tests(tic), src=src)
             why += f' (ZTF undiluted depth, TESS/Kepler depth {dep:.0f} ppm)'
         else:
             t, why = label(dep, rs, *vet_tests(tic), src=src)
+        inside = ''
+        if src == 'Gaia DR3 parallax' and dk:
+            r_all = gaia_radius(g, teff, tsig)[0]
+            inside = orbit_inside(r_all, period, m1)
+            if inside:                           # no companion can orbit this star at the period
+                t, why = 'unclassified', f'{inside}: the signal is not from this host; was {t}: {why}'
+            elif t != 'eclipsing binary':        # the class must hold over the radius errors
+                tc = class_from_rp(np.sqrt(dk / 1e6) * r_all / RJ_RSUN)
+                if tc is None:
+                    t, why = 'unclassified', f'radius error spans two classes: {why}'
+                else:
+                    t = tc
+        if hnotes:
+            why += '; ' + '; '.join(hnotes)
         ceb, cnote = contact_test(dur, period)
         if ceb and t != 'eclipsing binary':
             t, why = 'eclipsing binary', f'{cnote}; was {t}: {why}'
         # a planet or brown-dwarf size rests on the catalogued host; a duration the host density cannot produce means
         # that host is not the eclipsed star (or its parameters are wrong), so the size is undetermined
         long_, dnote = duration_test(dur, period, stellar_density(rs, m1), dk or 0)
+        sa, pc = lc_tests(tic)
+        if long_ and sa.get('detected') and not sa.get('stellar'):
+            # an occultation-depth secondary fixes e cos w and e sin w; a circular reading of an eccentric transit
+            # gives the density rho_true x rho_ecc_factor, so the duration is retested against that density
+            f_e = rho_ecc_factor(sa['esinw'], sa['ecc'])
+            long_, dnote = duration_test(dur, period, stellar_density(rs, m1) * f_e, dk or 0)
+            dnote += f" (eccentric: e {sa['ecc']:.2f}, density factor {f_e:.2f} from the secondary)"
         if long_ and t in ('planet', 'brown dwarf or low-mass star'):
             beb, bnote = blend_test(vet_blends(tic))
             if beb:                              # the eclipsed star is a resolved neighbour, not the host
@@ -872,11 +1324,14 @@ def run(status='ready', tics=None, gaia=True, external=True):
                 t, why = 'unclassified', f'too long for the host: {dnote}; was {t}: {why}'
         else:
             why += '; ' + ('too long for the host: ' if long_ else '') + dnote
-        if t == 'unclassified' and why != 'no transit depth':   # radius missing or duration too long: transit shape
-            st, snote = shape_test(con, tic, snr, dur, dk or 0, g, rs if long_ else None, m1 if long_ else None)
+        if t == 'unclassified' and why != 'no transit depth' and not inside:   # radius missing or too long: shape
+            use = long_ or (rs and m1 and src != 'TIC v8.2')
+            st, snote = shape_test(con, tic, snr, dur, dk or 0, g, rs if use else None, m1 if use else None,
+                                   rsamp=rsamp)
             t, why = (st, f'{snote}; was unclassified: {why}') if st else (t, f'{why}; {snote}')
         tests = [gaia_test(gd.get(tic), period, m1), gaia_rv(gd.get(tic), period, m1),
-                 apogee_test(ap.get(tic), period, m1), lamost_test(lm.get(tic), period, m1), (zeb, znote)]
+                 apogee_test(ap.get(tic), period, m1), lamost_test(lm.get(tic), period, m1), (zeb, znote),
+                 lc_test(sa, pc)]
         for eb, note in tests:
             if eb:
                 t, why = 'eclipsing binary', note + '; ' + why
@@ -898,6 +1353,12 @@ def main(argv):
     ap.add_argument('--status', default='ready', help='candidates of this status (default: ready)')
     ap.add_argument('--no-gaia', action='store_true', help='skip the Gaia DR3 cross-match')
     ap.add_argument('--no-external', action='store_true', help='skip the APOGEE and ZTF checks')
+    ap.add_argument('--lc', action='store_true', help='only download the light curves and store the any-phase '
+                    'secondary and phase-curve tests in summary.json (no class change)')
+    ap.add_argument('--keep', action='store_true', help='with --lc: keep the downloaded light curves')
     ap.add_argument('tic', type=int, nargs='*')
     a = ap.parse_args(argv)
+    if a.lc:
+        lc_checks(a.tic, a.status, keep=a.keep)
+        return
     run(a.status, a.tic, gaia=not a.no_gaia, external=not a.no_external)
