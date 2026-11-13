@@ -20,8 +20,16 @@ name the eclipsed object. A host with no TIC radius or mass takes the Gaia DR3 F
 that lasts more than DUTY_CONTACT (0.25) of the period needs (R1 + R2) / a > 0.7 whatever the host, which only a
 contact or near-contact pair gives, so it is an eclipsing binary. A candidate that fails the duration test and has a
 Gaia neighbour closer than 8 arcsec (which the difference-image test of the vetting cannot separate) that could
-produce the depth with an eclipse of at most half its light is a blended eclipsing binary on that neighbour. What is left unclassified has neither a
-stellar radius nor an identified eclipsed star. ZTF depths and odd/even tests need at least three in-eclipse epochs
+produce the depth with an eclipse of at most half its light is a blended eclipsing binary on that neighbour. What is still
+unclassified then goes through a transit-shape fit (shape_test): the folded transit windows of the vetting are fitted
+with a quadratic limb-darkened transit (batman; Claret 2017 and Claret & Bloemen 2011 coefficients) for Rp/R_star,
+a/R_star, b and the mid-time, with bootstrap errors, which gives the density of the eclipsed star, rho_LC. For a host
+without a radius, rho_LC must agree with a dwarf of the host's Teff (TIC, Gaia GSP-Phot, or Gaia Bp-Rp on the Pecaut &
+Mamajek 2013 sequence), and the dwarf radius at rho_LC then gives Rp. For a signal too long for its host, a grazing
+V-shaped fit, or a rho_LC below what any orbit with e < 0.6 allows around the host, makes it an eclipsing binary, and a
+flat-bottomed fit consistent with the catalogue density gives Rp = k R_star. Every decision needs 95 per cent of the
+bootstrap fits on its side. What is left unclassified has neither a stellar radius nor an identified eclipsed star, nor
+a transit shape that decides between them. ZTF depths and odd/even tests need at least three in-eclipse epochs
 whose median shows the eclipse. The label goes into the new candidate column objtype and the reason into notes.
 
     occulta classify [--status ready] [--no-gaia] [--no-external] [TIC ...]
@@ -243,7 +251,8 @@ def gaia_dr3(con, tics):
         g.rv_chisq_pvalue AS rvp, g.rv_renormalised_gof AS rvgof, g.rv_nb_transits AS rvn,
         o.nss_solution_type AS orb, o.period, o.eccentricity, o.semi_amplitude_primary AS k1,
         a.nss_solution_type AS acc, e.frequency AS ebfreq,
-        p.radius_flame AS rflame, p.radius_gspphot AS rgsp, p.mass_flame AS mflame
+        p.radius_flame AS rflame, p.radius_gspphot AS rgsp, p.mass_flame AS mflame,
+        g.bp_rp, p.teff_gspphot AS tgsp
         FROM tap_upload.pos AS u JOIN gaiadr3.gaia_source AS g
         ON 1=CONTAINS(POINT(u.ra, u.dec), CIRCLE(g.ra, g.dec, {GAIA_RADIUS_DEG}))
         LEFT JOIN gaiadr3.nss_two_body_orbit AS o ON o.source_id=g.source_id
@@ -266,7 +275,8 @@ def gaia_dr3(con, tics):
                                          'rvgof': num(row['rvgof']), 'rvn': num(row['rvn']),
                                          'ebper': 1 / num(row['ebfreq']) if num(row['ebfreq']) else None,
                                          'acc': None if np.ma.is_masked(row['acc']) else str(row['acc']),
-                                         'rad': num(row['rflame']) or num(row['rgsp']), 'mass': num(row['mflame'])})
+                                         'rad': num(row['rflame']) or num(row['rgsp']), 'mass': num(row['mflame']),
+                                         'bp_rp': num(row['bp_rp']), 'teff': num(row['tgsp'])})
     return out
 
 
@@ -497,6 +507,321 @@ def ztf_all(pos, cands):
         return {t: lc for t, lc in ex.map(one, todo) if lc is not None}
 
 
+# ---- transit-shape fit: the class of the signals that the radius or the duration leaves undetermined ----------------
+# The folded transit windows of the vetting are fitted with a quadratic limb-darkened transit (batman; Mandel & Agol
+# 2002, Kreidberg 2015) on a circular orbit with the period fixed. Free: k = Rp/R*, a/R*, b, the mid-time and the
+# flux zero point. The density of the eclipsed star follows from Kepler's third law, rho_LC = 3 pi (a/R*)^3 / (G P^2)
+# (Seager & Mallen-Ornelas 2003). Errors come from N_BOOT bootstrap resamplings of the points, and every decision
+# needs CONF of the resampled fits on its side, so that an ambiguous fit leaves the signal undetermined.
+FIT_SNR_MIN = 10.0                  # folded vetting SNR below this: no shape fit
+FIT_BINS, FIT_COVER_MIN = 10, 0.8   # at least 80 per cent of ten bins across the transit must hold data
+FIT_OOT_MIN = 10                    # points needed before and after the transit
+N_BOOT = 100
+CONF = 0.95                         # fraction of the bootstrap fits that a decision needs
+GRAZE_B = 0.9                       # grazing: b > 0.9 and b + k > 1 (V shape, no second and third contact)
+ECC_MAX = 0.6                       # largest eccentricity allowed for a long-period companion
+RHO_CAT_FAC = 1.3                   # catalogue density uncertainty (TIC radius ~7 per cent, mass ~15 per cent)
+# a transit at apoastron (omega = -90 deg) lasts longer by (1 + e)/(1 - e))^(1/2), so the circular fit gives
+# rho_LC / rho_star = ((1 - e) / (1 + e))^(3/2) (Kipping 2010; Dawson & Johnson 2012): 0.125 at e = 0.6, and 0.096
+# once the catalogue density may be 1.3 times too high
+RHO_EB_RATIO = ((1 - ECC_MAX) / (1 + ECC_MAX)) ** 1.5 / RHO_CAT_FAC
+MS_RHO_FAC = 1.5                    # spread of the main-sequence density at fixed Teff (age, metallicity)
+CADENCES_S = (20.0, 58.85, 120.0, 200.0, 600.0, 1765.5, 1800.0)
+
+
+def _tables():
+    from importlib import resources
+    if not hasattr(_tables, 'd'):
+        _tables.d = json.loads(resources.files('occulta').joinpath('stellar_tables.json').read_text())
+    return _tables.d
+
+
+def ld_coeffs(teff, logg, band='TESS'):
+    """Quadratic limb-darkening (u1, u2) of the nearest grid point (Teff in 250-K, log g in 0.5-dex units): Claret
+    (2017) for TESS, Claret & Bloemen (2011) for Kepler and K2; ATLAS above 3500 K and PHOENIX below, solar
+    metallicity. Unknown Teff or log g: 5750 K, 4.5."""
+    g = np.array(_tables()['claret']['TESS' if band == 'TESS' else 'Kepler'])
+    teff = teff if teff and np.isfinite(teff) else 5750.0
+    logg = logg if logg and np.isfinite(logg) else 4.5
+    i = int(np.argmin(((g[:, 0] - teff) / 250) ** 2 + ((g[:, 1] - logg) / 0.5) ** 2))
+    return float(g[i, 2]), float(g[i, 3])
+
+
+def ms_dwarfs():
+    """(Teff, Bp-Rp, R, M, rho) of the mean dwarf sequence of Pecaut & Mamajek (2013), rho in g/cm^3."""
+    m = np.array(_tables()['mamajek'])
+    return m[:, 0], m[:, 1], m[:, 2], m[:, 3], 1.40980 * m[:, 3] / m[:, 2] ** 3
+
+
+def ms_teff(bp_rp):
+    """Dwarf Teff at a Gaia Bp-Rp colour (no reddening correction), None outside the sequence."""
+    teff, c = ms_dwarfs()[:2]
+    if bp_rp is None or not np.isfinite(bp_rp) or not c.min() <= bp_rp <= c.max():
+        return None
+    o = np.argsort(c)
+    return float(np.interp(bp_rp, c[o], teff[o]))
+
+
+def ms_rho(teff):
+    """Mean density (g/cm^3) of a dwarf of this Teff."""
+    t, _, _, _, rho = ms_dwarfs()
+    return float(np.exp(np.interp(teff, t, np.log(rho))))
+
+
+def ms_radius(rho):
+    """Radius (R_sun) of the dwarf of this mean density, from the sequence ordered by density; NaN off the sequence."""
+    _, _, r, _, d = ms_dwarfs()
+    o = np.argsort(d)
+    x = np.log(np.asarray(rho, float))
+    return np.where((x >= np.log(d.min())) & (x <= np.log(d.max())), np.interp(x, np.log(d[o]), r[o]), np.nan)
+
+
+def rho_from_ar(ar, period_d):
+    """rho_LC = 3 pi (a/R*)^3 / (G P^2) in g/cm^3."""
+    return 3 * np.pi * np.asarray(ar) ** 3 / (G_CGS * (period_d * 86400.0) ** 2)
+
+
+def ar_from_rho(rho, period_d):
+    return (G_CGS * rho * (period_d * 86400.0) ** 2 / (3 * np.pi)) ** (1 / 3)
+
+
+def _models(tf, cad_s, period, u, fac=None):
+    """One batman model per cadence, integrated over the exposure (supersampled to about 4 min). fac ({cadence:
+    step factor}) reuses the integration step of an earlier model, which batman otherwise tunes on every call."""
+    import batman
+    p = batman.TransitParams()
+    p.t0, p.per, p.rp, p.a, p.inc, p.ecc, p.w, p.u, p.limb_dark = 0.0, period, 0.1, 20.0, 90.0, 0.0, 90.0, list(u), 'quadratic'
+    out = []
+    for c in np.unique(cad_s):
+        idx = np.flatnonzero(cad_s == c)
+        ss = max(1, int(round(c / 240.0)))
+        m = batman.TransitModel(p, tf[idx], supersample_factor=ss, exp_time=c / 86400.0,
+                                fac=None if fac is None else fac.get(c))
+        out.append((idx, m, p, c))
+    return out
+
+
+def _cadence(t):
+    """Exposure (s) of each point: the shorter gap to a neighbour, snapped to the nearest mission cadence."""
+    d = np.diff(t) * 86400.0
+    g = np.minimum(np.r_[d[:1], d], np.r_[d, d[-1:]]) if len(d) else np.array([1800.0])
+    c = np.array(CADENCES_S)
+    return c[np.argmin(np.abs(np.log(np.maximum(g, 1.0))[:, None] - np.log(c)[None, :]), axis=1)]
+
+
+def transit_model(theta, models, n, period):
+    """Flux of the folded light curve for theta = (k, log10 a/R*, b, dt0, f0)."""
+    k, lar, b, dt0, f0 = theta
+    ar = 10 ** lar
+    y = np.empty(n)
+    for idx, m, p, _ in models:
+        p.rp, p.a, p.t0 = k, ar, dt0
+        p.inc = float(np.degrees(np.arccos(min(b / ar, 1.0))))
+        y[idx] = m.light_curve(p)
+    return y - 1 + f0
+
+
+def fit_coverage(tf, dur_h):
+    """(ok, note): FIT_COVER_MIN of FIT_BINS bins across the transit hold data, and FIT_OOT_MIN points lie on
+    each side of it."""
+    h = dur_h / 48.0
+    inn = tf[np.abs(tf) < h]
+    filled = len(np.unique(np.floor((inn + h) / (2 * h) * FIT_BINS).clip(0, FIT_BINS - 1))) / FIT_BINS
+    pre, post = np.sum(tf < -1.2 * h), np.sum(tf > 1.2 * h)
+    ok = filled >= FIT_COVER_MIN and min(pre, post) >= FIT_OOT_MIN
+    return ok, f'{100 * filled:.0f} per cent of the transit covered, {pre}/{post} points before/after'
+
+
+def transit_fit(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_boot=N_BOOT, seed=0):
+    """Least-squares fit of a limb-darkened transit to the folded points (t, f = relative flux - 1), with bootstrap
+    errors. Returns None when the transit is not covered, else a dict with the best fit and the bootstrap samples of
+    k, a/R*, b, rho_LC (g/cm^3) and T14 (h)."""
+    from scipy.optimize import least_squares
+    t, f = np.asarray(t, float), np.asarray(f, float)
+    o = np.argsort(t)
+    t, f = t[o], f[o]
+    cad = _cadence(t)
+    tf = (t - t0 + 0.5 * period) % period - 0.5 * period
+    ok, cnote = fit_coverage(tf, dur_h)
+    if not ok:
+        return {'ok': False, 'note': cnote}
+    out = np.abs(tf) > 0.75 * dur_h / 24
+    sig = np.empty(len(f))
+    for c in np.unique(cad):                     # white noise of each cadence from its out-of-transit scatter
+        m = cad == c
+        ref = f[m & out] if (m & out).sum() >= 10 else f[m]
+        sig[m] = max(1.4826 * np.median(np.abs(ref - np.median(ref))), 1e-6)
+    models = _models(tf, cad, period, u)
+    fac = {c: m.fac for _, m, _, c in models}
+    T = dur_h / 24
+    k0 = np.sqrt(max(depth_ppm, 10.0) / 1e6)
+    lo = [1e-3, np.log10(1.05), 0.0, -0.25 * T, -0.05]
+    hi = [1.0, 3.0, 1.2, 0.25 * T, 0.05]
+
+    best = None
+    for b0 in (0.1, 0.5, 0.8, 0.95):
+        kk = min(0.99, k0 * (1.3 if b0 > 0.9 else 1.0))
+        ar0 = np.sqrt(max((1 + kk) ** 2 - b0 ** 2, 0.05)) / np.sin(min(np.pi * T / period, 1.5))
+        x0 = np.clip([kk, np.log10(max(ar0, 1.1)), b0, 0.0, 0.0], np.add(lo, 1e-9), np.subtract(hi, 1e-9))
+        x = _boot_one(f, sig, models, x0, lo, hi, T, period)
+        chi = float(np.sum(((f - transit_model(x, models, len(f), period)) / sig) ** 2))
+        if best is None or chi < best[1]:
+            best = (x, chi)
+    # each resampling is fitted twice, from the best fit and from a random impact parameter along the valley of equal
+    # duration (b and a/R_star trade off at long cadence and low SNR), and keeps the better fit, so that the bootstrap
+    # spread includes that degeneracy instead of staying at the first minimum
+    rng = np.random.default_rng(seed)
+    xb = best[0]
+    t14b = float(t14_h(xb[0], 10 ** xb[1], xb[2], period)) / 24
+    samp = []
+    for _ in range(n_boot):
+        idx = np.sort(rng.integers(0, len(f), len(f)))
+        mods = _models(tf[idx], cad[idx], period, u, fac)
+        b1 = rng.uniform(0, min(1.0 + xb[0], hi[2]) - 1e-3)
+        ar1 = np.sqrt(max((1 + xb[0]) ** 2 - b1 ** 2, 1e-3)) / np.sin(min(np.pi * t14b / period, 1.5))
+        x1 = np.clip([xb[0], np.log10(max(ar1, 1.06)), b1, xb[3], xb[4]], np.add(lo, 1e-9), np.subtract(hi, 1e-9))
+        fits = [_boot_one(f[idx], sig[idx], mods, x0, lo, hi, T, period) for x0 in (xb, x1)]
+        chi = [np.sum(((f[idx] - transit_model(x, mods, len(idx), period)) / sig[idx]) ** 2) for x in fits]
+        samp.append(fits[int(np.argmin(chi))])
+    s = np.array(samp)
+    k, ar, b = s[:, 0], 10 ** s[:, 1], s[:, 2]
+    return {'ok': True, 'note': cnote, 'k': k, 'ar': ar, 'b': b, 'rho': rho_from_ar(ar, period),
+            't14': t14_h(k, ar, b, period), 'best': {'k': xb[0], 'ar': 10 ** xb[1], 'b': xb[2],
+                                                     'rho': float(rho_from_ar(10 ** xb[1], period)),
+                                                     'chi2': best[1], 'n': len(f)}}
+
+
+def _boot_one(f, sig, models, x0, lo, hi, T, period):
+    from scipy.optimize import least_squares
+    r = least_squares(lambda th: (f - transit_model(th, models, len(f), period)) / sig, x0, bounds=(lo, hi),
+                      x_scale=[0.05, 0.1, 0.1, 0.01 * T + 1e-3, 1e-4], ftol=1e-6, xtol=1e-6)
+    return r.x
+
+
+def t14_h(k, ar, b, period):
+    """First-to-fourth-contact duration (h) on a circular orbit (Winn 2010, eq. 14)."""
+    k, ar, b = np.asarray(k), np.asarray(ar), np.asarray(b)
+    inc = np.arccos(np.clip(b / ar, 0, 1))
+    x = np.sqrt(np.clip((1 + k) ** 2 - b ** 2, 0, None)) / (ar * np.sin(inc))
+    return period / np.pi * np.arcsin(np.clip(x, 0, 1)) * 24
+
+
+def class_from_rp(rp_rj):
+    """Class when at least CONF of the companion radii (R_J) fall in one class interval, else None."""
+    rp = np.asarray(rp_rj, float)
+    rp = rp[np.isfinite(rp)]
+    if not len(rp):
+        return None
+    for t, m in (('planet', rp < PLANET_MAX_RJ), ('brown dwarf or low-mass star', (rp >= PLANET_MAX_RJ) & (rp <= BD_MAX_RJ)),
+                 ('eclipsing binary', rp > BD_MAX_RJ)):
+        if np.mean(m) >= CONF and len(rp) == len(np.asarray(rp_rj)):
+            return t
+    return None
+
+
+def _ci(x):
+    lo, med, hi = np.percentile(x, [2.5, 50, 97.5])
+    return f'{med:.3g} ({lo:.3g}-{hi:.3g})'
+
+
+def shape_long(fit, rho_cat, rstar):
+    """(class or None, note) for a signal too long for its catalogued host. Grazing in CONF of the fits: an eclipse,
+    since a grazing chord is shorter than a central one and makes the duration even less possible. rho_LC below
+    RHO_EB_RATIO x rho_cat in CONF of the fits: no orbit with e < ECC_MAX around the host gives the duration, so the
+    eclipsed star is a larger, lower-density star (blended or evolved). A flat-bottomed fit whose rho_LC agrees with
+    rho_cat: the box duration was wrong, and the class follows from Rp = k R_star."""
+    k, b, rho = fit['k'], fit['b'], fit['rho']
+    note = f"shape fit: rho_LC {_ci(rho)} g/cc against catalogue {rho_cat:.3g}, b {_ci(b)}, k {_ci(k)}"
+    graze = np.mean((b > GRAZE_B) & (b + k > 1))
+    if graze >= CONF:
+        return 'eclipsing binary', f'grazing V-shaped eclipse too long for the host ({100 * graze:.0f} per cent of fits); {note}'
+    low = np.mean(rho < RHO_EB_RATIO * rho_cat)
+    if low >= CONF:
+        return 'eclipsing binary', (f'eclipsed star less dense than the host by more than an orbit with e < {ECC_MAX} '
+                                    f'allows (rho_LC < {RHO_EB_RATIO:.3f} rho_cat in {100 * low:.0f} per cent of fits); {note}')
+    lo, hi = np.percentile(rho, [100 * (1 - CONF) / 2, 100 * (1 + CONF) / 2])
+    flat = np.mean(b + k < 1)
+    if flat >= CONF and lo <= rho_cat * RHO_CAT_FAC and hi >= rho_cat / RHO_CAT_FAC and rstar:
+        rp = k * rstar / RJ_RSUN
+        t = class_from_rp(rp)
+        if t:
+            return t, f'flat-bottomed fit consistent with the catalogue density, Rp {_ci(rp)} R_J; {note}'
+        return None, f'shape fit consistent with the host but Rp {_ci(rp)} R_J spans two classes; {note}'
+    return None, f'shape fit inconclusive; {note}'
+
+
+def shape_norad(fit, teff, tsrc):
+    """(class or None, note, rstar) for a host without a catalogue radius. The fitted density is compared with that of
+    a dwarf of the host's Teff; when they agree within MS_RHO_FAC (both within the bootstrap interval), the host is
+    taken as a dwarf with the radius of the dwarf sequence at rho_LC, and Rp = k R_star gives the class."""
+    k, rho = fit['k'], fit['rho']
+    note = f"shape fit: rho_LC {_ci(rho)} g/cc, b {_ci(fit['b'])}, k {_ci(k)}"
+    if teff is None:
+        return None, f'no Teff or Gaia colour for a main-sequence radius; {note}', None
+    rms = ms_rho(teff)
+    lo, hi = np.percentile(rho, [100 * (1 - CONF) / 2, 100 * (1 + CONF) / 2])
+    note += f'; dwarf of Teff {teff:.0f} K ({tsrc}) has rho {rms:.3g} g/cc'
+    if hi < rms / MS_RHO_FAC or lo > rms * MS_RHO_FAC:
+        return None, f'rho_LC inconsistent with a dwarf of this Teff; {note}', None
+    rs = ms_radius(rho)
+    rp = k * rs / RJ_RSUN
+    t = class_from_rp(rp)
+    rmed = float(np.nanmedian(rs))
+    if t:
+        return t, f'Rp {_ci(rp[np.isfinite(rp)])} R_J from main-sequence R_star {rmed:.2f} R_sun at rho_LC; {note}', rmed
+    return None, f'main-sequence R_star {rmed:.2f} R_sun gives Rp {_ci(rp[np.isfinite(rp)]) if np.isfinite(rp).any() else "off the sequence"} R_J; {note}', None
+
+
+def load_windows(tic):
+    """Transit windows kept by the vetting: (t, f, period, t0) or None."""
+    p = survey.FIND / sources.name_of(tic).replace(' ', '') / 'transit_windows.npz'
+    if not p.exists():
+        return None
+    z = np.load(p)
+    return z['t'], z['f'], float(z['period']), float(z['t0'])
+
+
+def stellar_teff(con, tic):
+    r = con.execute('SELECT teff FROM tic WHERE tic=?' if sources.mission_of(tic) == 'TESS'
+                    else 'SELECT teff FROM star WHERE sid=?', (tic,)).fetchone()
+    return r[0] if r and r[0] and r[0] > 0 else None
+
+
+def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None):
+    """(class or None, note) from the transit-shape fit of one undetermined signal: with the catalogue density when
+    the host has one (signal too long), from the dwarf sequence when it has no radius."""
+    w = load_windows(tic)
+    if w is None:
+        return None, 'shape fit: no transit windows'
+    if not snr or snr < FIT_SNR_MIN:
+        return None, f'shape fit: SNR {snr} below {FIT_SNR_MIN}'
+    t, f, period, t0 = w
+    band = 'TESS' if sources.mission_of(tic) == 'TESS' else 'Kepler'
+    rho_cat = stellar_density(rs, m1)
+    teff, tsrc = stellar_teff(con, tic), 'catalogue'
+    if teff is None and g.get('teff'):
+        teff, tsrc = g['teff'], 'Gaia DR3 GSP-Phot'
+    if teff is None and ms_teff(g.get('bp_rp')):
+        teff, tsrc = ms_teff(g['bp_rp']), 'Gaia Bp-Rp on the dwarf sequence'
+    if rho_cat:
+        logg = 4.438 + np.log10(m1 / rs ** 2)
+    elif teff:
+        tt, _, r, m, _ = ms_dwarfs()
+        logg = 4.438 + np.log10(np.interp(teff, tt, m) / np.interp(teff, tt, r) ** 2)
+    else:
+        logg = None
+    u = ld_coeffs(teff, logg, band)
+    fit = transit_fit(t, f, period, t0, dur_h, depth_ppm or 0, u=u)
+    if not fit['ok']:
+        return None, f"shape fit: {fit['note']} (too little)"
+    lnote = f' (u {u[0]:.2f}, {u[1]:.2f})'
+    if rho_cat:
+        c, n = shape_long(fit, rho_cat, rs)
+    else:
+        c, n, _ = shape_norad(fit, teff, tsrc)
+    return c, n + lnote
+
+
 def stellar_mass(con, tic):
     r = con.execute('SELECT mass FROM tic WHERE tic=?' if sources.mission_of(tic) == 'TESS'
                     else 'SELECT mass FROM star WHERE sid=?', (tic,)).fetchone()
@@ -507,7 +832,7 @@ def run(status='ready', tics=None, gaia=True, external=True):
     con = survey.db()
     if 'objtype' not in [r[1] for r in con.execute('PRAGMA table_info(candidate)')]:
         con.execute('ALTER TABLE candidate ADD COLUMN objtype TEXT')
-    rows = con.execute('SELECT tic, depth_ppm, notes, period, t0, dur_h FROM candidate WHERE status=?',
+    rows = con.execute('SELECT tic, depth_ppm, notes, period, t0, dur_h, snr FROM candidate WHERE status=?',
                        (status,)).fetchall()
     if tics:
         rows = [r for r in rows if r[0] in set(tics)]
@@ -519,7 +844,7 @@ def run(status='ready', tics=None, gaia=True, external=True):
     zl = ztf_all(pos, [(r[0], r[1]) for r in rows]) if external else {}
     print(f'Gaia {len(gd)}, APOGEE {len(ap)}, LAMOST {len(lm)}, ZTF {len(zl)} hosts matched')
     counts = {}
-    for tic, dep, notes, period, t0, dur in rows:
+    for tic, dep, notes, period, t0, dur, snr in rows:
         mission = sources.mission_of(tic)
         zeb, znote, zd = ztf_test(zl.get(tic), mission, period, t0, dur, dep or 0)
         rs, m1, src = stellar_radius(con, tic), stellar_mass(con, tic), 'TIC v8.2'
@@ -547,6 +872,9 @@ def run(status='ready', tics=None, gaia=True, external=True):
                 t, why = 'unclassified', f'too long for the host: {dnote}; was {t}: {why}'
         else:
             why += '; ' + ('too long for the host: ' if long_ else '') + dnote
+        if t == 'unclassified' and why != 'no transit depth':   # radius missing or duration too long: transit shape
+            st, snote = shape_test(con, tic, snr, dur, dk or 0, g, rs if long_ else None, m1 if long_ else None)
+            t, why = (st, f'{snote}; was unclassified: {why}') if st else (t, f'{why}; {snote}')
         tests = [gaia_test(gd.get(tic), period, m1), gaia_rv(gd.get(tic), period, m1),
                  apogee_test(ap.get(tic), period, m1), lamost_test(lm.get(tic), period, m1), (zeb, znote)]
         for eb, note in tests:

@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy", "scipy", "pandas", "matplotlib", "requests", "astropy", "astroquery", "lightkurve", "psutil",
+    "batman-package",
 ]
 
 [project.optional-dependencies]
@@ -31,4 +32,4 @@ occulta = "occulta.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-occulta = ["default_config.json"]
+occulta = ["default_config.json", "stellar_tables.json"]
