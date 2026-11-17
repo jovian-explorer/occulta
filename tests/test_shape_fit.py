@@ -90,3 +90,51 @@ def test_norad_dwarf():
 def test_norad_inconsistent_with_dwarf():
     assert c.shape_norad(fake(0.1, 0.3, 0.01), 5800, 'catalogue')[0] is None
     assert c.shape_norad(fake(0.1, 0.3, 1.0), None, '')[0] is None
+
+
+# ---- nested sampling (occulta classify --sampler nested)
+def test_flat_logz_matches_numerical_integral():
+    g = np.random.default_rng(3)
+    sig = np.full(50, 1e-3)
+    f = 2e-4 + g.normal(0, 1e-3, 50)
+    f0 = np.linspace(-0.05, 0.05, 200001)
+    ll = np.array([-0.5 * np.sum(((f - x) / sig) ** 2) for x in f0[::100]])      # coarse grid only for the peak
+    peak = f0[::100][np.argmax(ll)]
+    fine = np.linspace(peak - 0.002, peak + 0.002, 4001)
+    lfine = np.array([-0.5 * np.sum(((f - x) / sig) ** 2) for x in fine]) - 0.5 * np.sum(np.log(2 * np.pi * sig ** 2))
+    m = lfine.max()
+    num = m + np.log(np.trapezoid(np.exp(lfine - m), fine) / 0.1)
+    assert abs(c.flat_logz(f, sig) - num) < 1e-3
+
+
+def test_nested_fit_recovers_density_and_prefers_the_transit():
+    pytest.importorskip('dynesty')
+    P, ar, k, b = 3.0, 10.0, 0.1, 0.3
+    t, f = synth(P, ar, k, b)
+    dur = float(c.t14_h(k, ar, b, P))
+    r = c.transit_fit_nested(t, f, P, 0.0, dur, k * k * 1e6, u=(0.4, 0.25), n_live=100)
+    assert r['ok']
+    lo, hi = np.percentile(r['rho'], [0.5, 99.5])
+    assert lo < c.rho_from_ar(ar, P) < hi
+    assert abs(np.median(r['k']) - k) < 0.01
+    assert r['ln_bf'] > 100                                    # a 1 per cent transit at SNR ~ 100 is decisive
+    for key in ('k', 'ar', 'b', 'rho', 't14'):
+        assert len(r[key]) == len(r['k']) > 50
+    cls, note = c.shape_long(r, float(c.rho_from_ar(ar, P)), 1.0)   # the posterior drives the same decisions
+    assert cls == 'planet', note                               # flat-bottomed, consistent with a Sun-like host
+
+
+def test_nested_fit_finds_no_transit_in_noise():
+    pytest.importorskip('dynesty')
+    t, _ = synth()
+    f = np.random.default_rng(5).normal(0, 5e-4, len(t))
+    r = c.transit_fit_nested(t, f, 3.0, 0.0, 2.4, 1e4, n_live=100)
+    assert r['ok'] and r['ln_bf'] < 1                       # the evidence does not favour a transit in pure noise
+
+
+def test_nested_fit_refuses_uncovered_transit():
+    pytest.importorskip('dynesty')
+    t, f = synth()
+    keep = np.abs((t + 1.5) % 3.0 - 1.5) > 0.02
+    assert not c.transit_fit_nested(t[keep], f[keep], 3.0, 0.0, 2.4, 1e4)['ok']
+

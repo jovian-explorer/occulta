@@ -22,8 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "dynesty"]
 map = ["tess-point"]
+nested = ["dynesty"]
 
 [project.scripts]
 occulta = "occulta.cli:main"

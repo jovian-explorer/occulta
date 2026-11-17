@@ -29,10 +29,13 @@ Mamajek 2013 sequence), and the dwarf radius at rho_LC then gives Rp. For a sign
 V-shaped fit, or a rho_LC below what any orbit with e < 0.6 allows around the host, makes it an eclipsing binary, and a
 flat-bottomed fit consistent with the catalogue density gives Rp = k R_star. Every decision needs 95 per cent of the
 bootstrap fits on its side. What is left unclassified has neither a stellar radius nor an identified eclipsed star, nor
-a transit shape that decides between them. ZTF depths and odd/even tests need at least three in-eclipse epochs
+a transit shape that decides between them. With --sampler nested, the bootstrap is replaced by nested sampling
+(dynesty; Skilling 2006, Speagle 2020) of the same model under uniform priors on the same ranges: its posterior
+samples take the place of the bootstrap fits in every decision, and the note adds ln B, the log evidence of the transit
+against a flat light curve. ZTF depths and odd/even tests need at least three in-eclipse epochs
 whose median shows the eclipse. The label goes into the new candidate column objtype and the reason into notes.
 
-    occulta classify [--status ready] [--no-gaia] [--no-external] [TIC ...]
+    occulta classify [--status ready] [--no-gaia] [--no-external] [--sampler bootstrap|nested] [TIC ...]
 """
 import argparse
 import json
@@ -634,11 +637,9 @@ def fit_coverage(tf, dur_h):
     return ok, f'{100 * filled:.0f} per cent of the transit covered, {pre}/{post} points before/after'
 
 
-def transit_fit(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_boot=N_BOOT, seed=0):
-    """Least-squares fit of a limb-darkened transit to the folded points (t, f = relative flux - 1), with bootstrap
-    errors. Returns None when the transit is not covered, else a dict with the best fit and the bootstrap samples of
-    k, a/R*, b, rho_LC (g/cm^3) and T14 (h)."""
-    from scipy.optimize import least_squares
+def _fit_inputs(t, f, period, t0, dur_h, u):
+    """Folded times, per-point white noise, the batman models and the parameter bounds shared by the bootstrap and the
+    nested-sampling fits; {'ok': False, 'note'} when the transit is not covered."""
     t, f = np.asarray(t, float), np.asarray(f, float)
     o = np.argsort(t)
     t, f = t[o], f[o]
@@ -653,12 +654,21 @@ def transit_fit(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_boot=N_BOOT
         m = cad == c
         ref = f[m & out] if (m & out).sum() >= 10 else f[m]
         sig[m] = max(1.4826 * np.median(np.abs(ref - np.median(ref))), 1e-6)
-    models = _models(tf, cad, period, u)
-    fac = {c: m.fac for _, m, _, c in models}
     T = dur_h / 24
+    return {'ok': True, 'note': cnote, 'tf': tf, 'f': f, 'cad': cad, 'sig': sig, 'models': _models(tf, cad, period, u),
+            'T': T, 'lo': [1e-3, np.log10(1.05), 0.0, -0.25 * T, -0.05], 'hi': [1.0, 3.0, 1.2, 0.25 * T, 0.05]}
+
+
+def transit_fit(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_boot=N_BOOT, seed=0):
+    """Least-squares fit of a limb-darkened transit to the folded points (t, f = relative flux - 1), with bootstrap
+    errors. Returns None when the transit is not covered, else a dict with the best fit and the bootstrap samples of
+    k, a/R*, b, rho_LC (g/cm^3) and T14 (h)."""
+    d = _fit_inputs(t, f, period, t0, dur_h, u)
+    if not d['ok']:
+        return d
+    tf, f, cad, sig, models, T, lo, hi, cnote = (d[x] for x in ('tf', 'f', 'cad', 'sig', 'models', 'T', 'lo', 'hi', 'note'))
+    fac = {c: m.fac for _, m, _, c in models}
     k0 = np.sqrt(max(depth_ppm, 10.0) / 1e6)
-    lo = [1e-3, np.log10(1.05), 0.0, -0.25 * T, -0.05]
-    hi = [1.0, 3.0, 1.2, 0.25 * T, 0.05]
 
     best = None
     for b0 in (0.1, 0.5, 0.8, 0.95):
@@ -691,6 +701,68 @@ def transit_fit(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_boot=N_BOOT
             't14': t14_h(k, ar, b, period), 'best': {'k': xb[0], 'ar': 10 ** xb[1], 'b': xb[2],
                                                      'rho': float(rho_from_ar(10 ** xb[1], period)),
                                                      'chi2': best[1], 'n': len(f)}}
+
+
+# ---- nested-sampling alternative to the bootstrap (occulta classify --sampler nested) --------------------------------
+# The same transit model, data, noise and parameter ranges, sampled with static nested sampling (Skilling
+# 2006; dynesty, Speagle 2020) under uniform priors equal to the least-squares bounds. The equal-weight posterior
+# samples replace the bootstrap samples in every decision, so that the b - a/R* degeneracy of long-cadence or low-SNR
+# transits is mapped by the likelihood rather than by refits from two starting points. The evidence of the transit is
+# compared with that of a flat light curve (f0 alone, same prior), which gives ln B, the Bayesian weight of the dip.
+N_LIVE = 250
+DLOGZ = 0.5
+
+
+def flat_logz(f, sig, lo=-0.05, hi=0.05):
+    """ln evidence of a constant flux f0 with a uniform prior on [lo, hi] and Gaussian errors sig (exact)."""
+    from scipy.special import ndtr
+    w = 1.0 / sig ** 2
+    W = w.sum()
+    fw = float((w * f).sum() / W)
+    chi2 = float((w * (f - fw) ** 2).sum())
+    mass = max(float(ndtr((hi - fw) * np.sqrt(W)) - ndtr((lo - fw) * np.sqrt(W))), 1e-300)
+    return (-0.5 * chi2 - 0.5 * float(np.log(2 * np.pi * sig ** 2).sum()) + 0.5 * np.log(2 * np.pi / W)
+            + np.log(mass) - np.log(hi - lo))
+
+
+def transit_fit_nested(t, f, period, t0, dur_h, depth_ppm, u=(0.4, 0.25), n_live=N_LIVE, seed=0):
+    """Nested-sampling fit of the limb-darkened transit (dynesty). Returns what transit_fit returns, with equal-weight
+    posterior samples in place of the bootstrap ones, plus logz, logz_err and ln_bf (ln evidence of the transit minus
+    that of a flat light curve). depth_ppm is accepted for the signature of transit_fit and not used: the prior is
+    the full range of the bounds."""
+    try:
+        import dynesty
+    except ImportError as e:
+        raise ImportError('the nested sampler needs dynesty: pip install dynesty (or pip install ".[nested]")') from e
+    d = _fit_inputs(t, f, period, t0, dur_h, u)
+    if not d['ok']:
+        return d
+    f, sig, models, lo, hi = d['f'], d['sig'], d['models'], np.array(d['lo']), np.array(d['hi'])
+    n = len(f)
+    lnorm = -0.5 * float(np.log(2 * np.pi * sig ** 2).sum())
+
+    def loglike(th):
+        r = (f - transit_model(th, models, n, period)) / sig
+        return lnorm - 0.5 * float(r @ r)
+
+    def prior(q):
+        return lo + q * (hi - lo)
+
+    rng = np.random.default_rng(seed)
+    s = dynesty.NestedSampler(loglike, prior, 5, nlive=n_live, bound='multi', sample='rwalk', rstate=rng)
+    s.run_nested(dlogz=DLOGZ, print_progress=False)
+    res = s.results
+    eq = res.samples_equal(rstate=rng)
+    i = int(np.argmax(res.logl))
+    xb = res.samples[i]
+    k, ar, b = eq[:, 0], 10 ** eq[:, 1], eq[:, 2]
+    logz, logz_err = float(res.logz[-1]), float(res.logzerr[-1])
+    chi = float(-2 * (res.logl[i] - lnorm))
+    return {'ok': True, 'note': d['note'], 'k': k, 'ar': ar, 'b': b, 'rho': rho_from_ar(ar, period),
+            't14': t14_h(k, ar, b, period), 'logz': logz, 'logz_err': logz_err,
+            'ln_bf': logz - flat_logz(f, sig, lo[4], hi[4]), 'n_like': int(np.sum(res.ncall)),
+            'best': {'k': xb[0], 'ar': 10 ** xb[1], 'b': xb[2], 'rho': float(rho_from_ar(10 ** xb[1], period)),
+                     'chi2': chi, 'n': n}}
 
 
 def _boot_one(f, sig, models, x0, lo, hi, T, period):
@@ -808,10 +880,10 @@ def shape_evolved(fit, rsamp, seed=2):
     return None, f'Rp {_ci(rp)} R_J (k x Gaia parallax radius) spans two classes; {note}'
 
 
-def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None, rsamp=None):
+def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None, rsamp=None, sampler='bootstrap'):
     """(class or None, note) from the transit-shape fit of one undetermined signal: with the host density when it
     has one, with the Gaia parallax radius (rsamp) of an evolved host of unknown mass, and from the dwarf sequence
-    when it has no radius."""
+    when it has no radius. sampler 'nested' uses the posterior of transit_fit_nested instead of the bootstrap."""
     w = load_windows(tic)
     if w is None:
         return None, 'shape fit: no transit windows'
@@ -831,10 +903,12 @@ def shape_test(con, tic, snr, dur_h, depth_ppm, g, rs=None, m1=None, rsamp=None)
     else:
         logg = None
     u = ld_coeffs(teff, logg, band)
-    fit = transit_fit(t, f, period, t0, dur_h, depth_ppm or 0, u=u)
+    fitter = transit_fit_nested if sampler == 'nested' else transit_fit
+    fit = fitter(t, f, period, t0, dur_h, depth_ppm or 0, u=u)
     if not fit['ok']:
         return None, f"shape fit: {fit['note']} (too little)"
-    lnote = f' (u {u[0]:.2f}, {u[1]:.2f})'
+    lnote = f' (u {u[0]:.2f}, {u[1]:.2f}'
+    lnote += f"; nested sampling, ln B transit/flat {fit['ln_bf']:.1f})" if 'ln_bf' in fit else ')'
     if rho_cat:
         c, n = shape_long(fit, rho_cat, rs)
     elif rsamp is not None:
@@ -1257,7 +1331,7 @@ def lc_test(sa, pc):
     return False, '; '.join(notes)
 
 
-def run(status='ready', tics=None, gaia=True, external=True):
+def run(status='ready', tics=None, gaia=True, external=True, sampler='bootstrap'):
     con = survey.db()
     if 'objtype' not in [r[1] for r in con.execute('PRAGMA table_info(candidate)')]:
         con.execute('ALTER TABLE candidate ADD COLUMN objtype TEXT')
@@ -1356,7 +1430,7 @@ def run(status='ready', tics=None, gaia=True, external=True):
         if t == 'unclassified' and why != 'no transit depth' and not inside:   # radius missing or too long: shape
             use = long_ or (rs and m1 and src != 'TIC v8.2')
             st, snote = shape_test(con, tic, snr, dur, dk or 0, g, rs if use else None, m1 if use else None,
-                                   rsamp=rsamp)
+                                   rsamp=rsamp, sampler=sampler)
             t, why = (st, f'{snote}; was unclassified: {why}') if st else (t, f'{why}; {snote}')
         tests = [gaia_test(gd.get(tic), period, m1), gaia_rv(gd.get(tic), period, m1),
                  apogee_test(ap.get(tic), period, m1), lamost_test(lm.get(tic), period, m1), (zeb, znote),
@@ -1385,9 +1459,12 @@ def main(argv):
     ap.add_argument('--lc', action='store_true', help='only download the light curves and store the any-phase '
                     'secondary and phase-curve tests in summary.json (no class change)')
     ap.add_argument('--keep', action='store_true', help='with --lc: keep the downloaded light curves')
+    ap.add_argument('--sampler', choices=('bootstrap', 'nested'), default='bootstrap',
+                    help='errors of the transit-shape fit: bootstrap of least-squares fits (default) or nested '
+                    'sampling with dynesty, which also gives the evidence of the transit against a flat light curve')
     ap.add_argument('tic', type=int, nargs='*')
     a = ap.parse_args(argv)
     if a.lc:
         lc_checks(a.tic, a.status, keep=a.keep)
         return
-    run(a.status, a.tic, gaia=not a.no_gaia, external=not a.no_external)
+    run(a.status, a.tic, gaia=not a.no_gaia, external=not a.no_external, sampler=a.sampler)
