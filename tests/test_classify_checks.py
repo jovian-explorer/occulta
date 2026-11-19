@@ -59,3 +59,29 @@ def test_radius_source_is_named():
     t, why = c.label(10000, 1.0, np.nan, np.nan, src='Gaia DR3')
     assert t == 'planet' and '(Gaia DR3)' in why
     assert '(' not in c.label(10000, 1.0, np.nan, np.nan)[1]
+
+
+def test_period_radius_alias():
+    assert abs(c.usp_rmax(0.2691) - 1.65) < 0.02 and c.usp_rmax(0.5) == c.PLANET_MAX_RJ
+    assert c.alias_test(0.2691, 5814, 2.64)[0] and c.alias_test(0.2691, 5814, 2.64)[1].startswith('period-radius alias')
+    assert not c.alias_test(0.93, 6000, 1.0)[0]           # WASP-103 b like: inside the envelope
+    assert not c.alias_test(0.27, 2000, 0.5)[0]           # small radius
+    assert not c.alias_test(1.5, 40000, 1.0)[0]           # P above 1 d: not tested
+
+
+def test_catalogue_flags_do_not_change_new(monkeypatch):
+    from astropy.table import Table
+    from astroquery.simbad import Simbad
+    from occulta.binaries import catalogues as cat
+
+    class FakeViz:                                    # ASAS-SN and Kostov hits at 5 arcsec, nothing elsewhere
+        def __init__(self, *a, **k): pass
+        def query_region(self, c, radius, catalog):
+            hit = catalog in ('II/366/catv2021', 'J/ApJS/279/50/table2')
+            return [Table({'_r': [5.0], 'ASASSN-V': ['x'], 'Period': ['1.0']})] if hit else []
+        def query_constraints(self, **k): return []
+    monkeypatch.setattr(cat, 'Vizier', FakeViz)
+    monkeypatch.setattr(Simbad, 'query_region', lambda *a, **k: None)
+    monkeypatch.setattr(cat.requests, 'get', lambda *a, **k: (_ for _ in ()).throw(OSError('offline')))
+    out = cat.lookup(1, 10.0, 10.0)
+    assert out['flags'] == ['TESS_T10K_unvetted', 'ASASSN'] and out['new']   # flagged, still counted as new

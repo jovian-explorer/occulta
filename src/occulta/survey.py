@@ -347,6 +347,8 @@ def work_job(con, jid, m, u, deadline):
             from . import rogues
             rogues.rank(con, FIND, CFG.get('common_mode_n', 5))
         con.execute("UPDATE job SET status='done', finished=? WHERE job=?", (time.strftime('%Y-%m-%d %H:%M'), jid))
+        if 3000 <= u < 4000:   # Kepler tries every catalogued target; only those observed in the quarter have a light curve
+            con.execute("UPDATE job SET n_targets=(SELECT COUNT(*) FROM target WHERE sector=? AND status=1) WHERE job=?", (u, jid))
         con.commit()
         log(jid, 'complete')
     return left == 0

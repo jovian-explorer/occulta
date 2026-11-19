@@ -52,6 +52,45 @@ GIANT_RSUN = 3.0
 OE_SIGMA = SEC_SIGMA = 3.0          # the cuts of planets.vet
 
 
+ALIAS_P_MAX = 1.0                   # d: only periods below this are tested (the shortest known giants are at 0.67 d)
+ALIAS_R_MIN = 1.0                   # R_J: smaller radii are possible at every period
+ROCHE_H = 12.6                      # h: Roche period of a fluid body of 1 g/cc, P = ROCHE_H / sqrt(rho / (g/cc))
+M_MAX_MJ = 13.0                     # M_J: deuterium-burning limit, the heaviest planet
+RHO_J = 1.326                       # g/cc, mean density of Jupiter
+
+
+def usp_rmax(period_d):
+    """Largest radius (R_J) a planet of at most 13 M_J can have at this period and still outlast the Roche limit.
+
+    A fluid planet of density rho survives only at P >= 12.6 h / sqrt(rho / 1 g/cc), so rho >= (12.6 h / P)^2.
+    The densest planet of radius R has the maximum mass, rho = M_MAX_MJ RHO_J / R^3 (R in R_J), hence
+    R_max = (M_MAX_MJ RHO_J / rho_Roche)^(1/3), capped at PLANET_MAX_RJ (the largest radius a gas giant reaches).
+    Examples: 1.65 R_J at 0.27 d, 1.78 R_J at 0.30 d, 2.0 R_J from 0.36 d.  The known giants agree: of the NEA planets
+    above 0.8 R_J below 1 d none is shorter than 0.67 d (TOI-2109 b) and all but one are under 1.55 R_J."""
+    rho = (ROCHE_H / (period_d * 24.0)) ** 2
+    return min(PLANET_MAX_RJ, (M_MAX_MJ * RHO_J / rho) ** (1 / 3))
+
+
+def alias_test(period_d, dep_ppm, rstar):
+    """(is_alias, note): a planet or brown-dwarf size that the Roche limit forbids at P.
+
+    Such a signal is not a planet at P.  The physical reading is an eclipsing binary at 2P whose two similar
+    eclipses fold on top of each other (odd/even depth and a phase-0.5 dip are then the same as the primary and
+    need not be resolved).  The odd/even and secondary tests of vet_tests and lc_test run first; this rule
+    catches the cases where noise hides the difference."""
+    if not (period_d and dep_ppm and rstar) or period_d >= ALIAS_P_MAX:
+        return False, ''
+    rp = np.sqrt(dep_ppm / 1e6) * rstar / RJ_RSUN
+    if rp < ALIAS_R_MIN:
+        return False, ''
+    rmax = usp_rmax(period_d)
+    if rp <= rmax:
+        return False, f'Rp {rp:.2f} R_J at P {period_d:.3f} d is within the Roche envelope ({rmax:.2f} R_J)'
+    return True, (f'period-radius alias: Rp {rp:.2f} R_J exceeds the Roche limit of {rmax:.2f} R_J at P {period_d:.3f} d; '
+                  f'an equal-eclipse binary at 2P = {2 * period_d:.3f} d')
+
+
+
 def fill_star(con, sids):
     """TIC v8.2 parameters of Kepler and K2 stars, from the nearest TIC entry (within 3 arcsec) at the position that
     MAST resolves for the KIC or EPIC name; kept in the star table."""
@@ -208,7 +247,7 @@ def blend_test(blends, sep_max=BLEND_SEP_ARCSEC, need_max=BLEND_MAX_ECLIPSE):
                   f"gives the depth with a {100 * b['eclipse_needed']:.1f} per cent eclipse")
 
 
-CLASS_PARTS = ('Rp ', 'giant host', 'Gaia ', 'TESS/Kepler depth', 'ZTF', 'APOGEE', 'LAMOST', 'duration ',
+CLASS_PARTS = ('period-radius alias', 'Rp ', 'giant host', 'Gaia ', 'TESS/Kepler depth', 'ZTF', 'APOGEE', 'LAMOST', 'duration ',
                'too long', 'no stellar radius', 'no transit depth', 'secondary eclipse at', 'odd/even depth',
                'was ', 'contact or near-contact', 'blended eclipsing')
 
@@ -1440,6 +1479,12 @@ def run(status='ready', tics=None, gaia=True, external=True, sampler='bootstrap'
                 t, why = 'eclipsing binary', note + '; ' + why
             elif note:
                 why += '; ' + note
+        if t in ('planet', 'brown dwarf or low-mass star') and rs:
+            aeb, anote = alias_test(period, dk, rs)
+            if aeb:
+                t, why = 'eclipsing binary', f'{anote}; was {t}: {why}'
+            elif anote:
+                why += '; ' + anote
         kept = strip_class(notes)
         con.execute('UPDATE candidate SET objtype=?, notes=?, updated=? WHERE tic=?',
                     (t, '; '.join(kept + [f'class: {t} ({why})']), time.strftime('%Y-%m-%d %H:%M'), tic))

@@ -10,17 +10,19 @@ from astropy.coordinates import SkyCoord
 from astroquery.vizier import Vizier
 import os
 # the CDS server is sometimes unreachable for hours; the CfA mirror holds the same catalogues
-Vizier.VIZIER_SERVER = os.environ.get('VIZIER_SERVER', 'vizier.cfa.harvard.edu')
+SERVER = os.environ.get('VIZIER_SERVER', 'vizier.cfa.harvard.edu')   # Vizier(vizier_server=...): setting the class attribute has no effect
 
 VIZ = {'VSX': 'B/vsx/vsx', 'GCVS': 'B/gcvs/gcvs_cat', 'GaiaDR3_EB': 'I/358/veb', 'GaiaDR3_class': 'I/358/vclassre',
        'TESS_EB': 'J/ApJS/258/16/tess-ebs', 'TESS_OBAF_EB': 'J/A+A/691/A242/obaf-eb1',
-       'TESS_T10K_EB': 'J/ApJS/279/50/table3', 'TESS_T10K_unvetted': 'J/ApJS/279/50/table2'}
+       'TESS_T10K_EB': 'J/ApJS/279/50/table3', 'TESS_T10K_unvetted': 'J/ApJS/279/50/table2',
+       'ASASSN': 'II/366/catv2021', 'ATLAS': 'J/AJ/156/241/table4'}
+FLAGS = ('TESS_T10K_unvetted', 'ASASSN', 'ATLAS', 'Hipparcos')   # reported as flags, never counted in 'new'
 
 
 def lookup(tic, ra, dec):
     c = SkyCoord(ra, dec, unit='deg')
     out = {'self': {}, 'neighbours_63arcsec': []}
-    v = Vizier(columns=['*', '_r'], row_limit=20)
+    v = Vizier(columns=['*', '_r'], row_limit=20, vizier_server=SERVER)
     for name, cat in VIZ.items():
         try:
             res = v.query_region(c, radius=63 * u.arcsec, catalog=cat)
@@ -31,11 +33,21 @@ def lookup(tic, ra, dec):
         for r in rows:
             sep = float(r['_r'])   # arcsec, the unit of the query radius
             label = {k: str(r[k]) for k in r.colnames if k in ('Name', 'Type', 'Period', 'GCVS', 'VarType', 'Class',
-                                                                  'Source', 'TIC', 'Per')}
+                                                                  'Source', 'TIC', 'Per', 'ASASSN-V', 'ATOID', 'ls-Pday')}
             if sep <= 10:
                 out['self'][name] = label
             else:
                 out['neighbours_63arcsec'].append({'catalogue': name, 'sep_arcsec': round(sep, 1), **label})
+    try:                                   # Hipparcos variability annexes are keyed by HIP: join through hip_main
+        h = v.query_region(c, radius=10 * u.arcsec, catalog='I/239/hip_main')
+        if len(h):
+            hip = int(h[0][0]['HIP'])
+            for ann in ('I/239/hip_va_1', 'I/239/hip_va_2'):
+                a = Vizier(vizier_server=SERVER).query_constraints(catalog=ann, HIP=f'={hip}')
+                if len(a) and len(a[0]):
+                    out['self']['Hipparcos'] = {'HIP': str(hip), 'VarType': str(a[0][0]['VarType'])}
+    except Exception as e:
+        out['self']['Hipparcos'] = f'query failed: {e!r}'[:80]
     try:
         from astroquery.simbad import Simbad
         Simbad.add_votable_fields('otype')
@@ -57,4 +69,5 @@ def lookup(tic, ra, dec):
     out['new'] = not any(k in var and isinstance(st[k], dict) for k in st) and \
         not ('SIMBAD' in st and isinstance(st['SIMBAD'], dict) and any(
             x in st['SIMBAD']['otype'] for x in ('EB', 'V*', 'Var', 'Pu', 'dS', 'RR', 'Ro', 'El', 'SB', 'gD', 'BY', 'RS')))
+    out['flags'] = [k for k in FLAGS if isinstance(st.get(k), dict)]
     return out
