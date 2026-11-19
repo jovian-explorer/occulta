@@ -12,10 +12,11 @@ def _transits(t, P, t0, depth, dur_d):
 
 
 def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min=10, noise=400e-6, extra=None,
-                   star=None, cand=None, gaia=None, other=None):
+                   star=None, cand=None, gaia=None, other=None, other_where=(1, 1)):
     """Vet star 1 by hand on synthetic sectors of 26 d that begin at `starts`; returns (status, period, notes).
     `star` is a TIC row (ra, dec, tmag, teff, rad, mass, dist, gaia, contratio); `cand` a BLS ephemeris (period, t0, dur_h,
-    depth_ppm) that stands in for the survey's candidate. `gaia` is the answer of the Gaia checks (empty by default); `other` is (period, t0) of another candidate."""
+    depth_ppm) that stands in for the survey's candidate. `gaia` is the answer of the Gaia checks (empty by default); `other` is (period, t0) of another candidate,
+    imaged in sector/camera `other_where` while star 1 is imaged in sector 1, camera 1."""
     from occulta import planets, survey
     rng = np.random.default_rng(1)
     lcs = {}
@@ -33,6 +34,8 @@ def _vet_synthetic(tmp_path, monkeypatch, starts, P, t0, depth, dur, cadence_min
         con.execute("INSERT INTO candidate(tic, kind, status) VALUES (1, 'manual', 'new')")
     if other:
         con.execute("INSERT INTO candidate(tic, kind, period, t0, status) VALUES (2, 'bls', ?, ?, 'new')", other)
+        con.execute('INSERT INTO star_sector(tic, sector, cam, ccd) VALUES (1, 1, 1, 1)')
+        con.execute('INSERT INTO star_sector(tic, sector, cam, ccd) VALUES (2, ?, ?, 1)', other_where)
     planets.vet(con, 1, tmp_path / 'findings')
     return con.execute('SELECT status, period, notes FROM candidate WHERE tic=1').fetchone()
 

@@ -107,6 +107,15 @@ def test_vetting_rejects_a_signal_shared_with_another_candidate_within_the_toler
     assert 'sector-synchronised' not in notes, notes
 
 
+def test_sector_synchronised_match_needs_the_same_sector_on_any_camera(tmp_path, monkeypatch):
+    """A match with a star never imaged in the same sector is chance; one on another camera of the same sector is a
+    spacecraft-wide systematic (momentum dump, K2 thruster firing) and still rejects."""
+    status, _, notes = _vet(tmp_path, monkeypatch, other=(7.13 * 1.002, 1003.4), other_where=(2, 1))   # other sector
+    assert 'sector-synchronised' not in notes, notes
+    status, _, notes = _vet(tmp_path, monkeypatch, other=(7.13 * 1.002, 1003.4), other_where=(1, 3))   # other camera
+    assert status == 'rejected' and 'sector-synchronised' in notes, notes
+
+
 # ---------------------------------------------------------------- candidates across sectors and units
 def _promoted(tmp_path, evs, inv=3.0, known=None):
     """Promote star 1 with events (sector, t0, duration h, depth ppm, S/N); returns its candidate rows."""

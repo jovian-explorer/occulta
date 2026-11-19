@@ -508,7 +508,14 @@ def vet(con, tic, findings):
                 reasons.append(f'depth changes between epochs ({d_.min()*1e6:.0f}-{d_.max()*1e6:.0f} ppm): aperture-dependent dilution of a blend')
         if np.isfinite(rho_star) and rho_transit < 0.05 * rho_star:
             reasons.append(f'transit far too long for the star (density {rho_transit:.3f} vs {rho_star:.2f} g/cc)')
-        for (otic, oP, oT0) in con.execute('SELECT tic, period, t0 FROM candidate WHERE tic != ? AND period > 0', (tic,)).fetchall():
+        # a sector-synchronised systematic (momentum dumps, K2 thruster firings, scattered light) shows up on stars imaged
+        # in the same sector or campaign, on any camera or module, since the spacecraft events are common to all of them;
+        # a period/epoch match with a star never observed in the same sector is a chance coincidence among tens of
+        # thousands of candidates, not evidence of a systematic
+        for (otic, oP, oT0) in con.execute(
+                'SELECT c.tic, c.period, c.t0 FROM candidate c WHERE c.tic != ? AND c.period > 0 AND EXISTS ('
+                'SELECT 1 FROM star_sector a JOIN star_sector b ON a.sector = b.sector '
+                'WHERE a.tic = ? AND b.tic = c.tic)', (tic, tic)).fetchall():
             if abs(oP / P - 1) < 0.003 and oT0 is not None and abs((((oT0 - t0) / P + 0.5) % 1 - 0.5) * P) < 0.3:
                 reasons.append(f'same period and epoch as {sources.name_of(otic)}: sector-synchronised systematic')
                 break
