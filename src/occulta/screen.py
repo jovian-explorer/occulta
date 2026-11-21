@@ -14,6 +14,8 @@ TIC row and the notes written by the earlier vetting), so it runs in seconds and
   DEPTH    event depths differ by more than a factor 3 between sectors, so the signal is not one astrophysical depth
   VSHAPE   most events are V-shaped while the object is labelled a planet
   CROSS    three or more ready stars share one period and one epoch (a common systematic, not three coincidences)
+  SYNC     another candidate imaged in a shared sector has the same period and epoch (the planets.vet rule, for
+           candidates vetted before it)
   BLEND    a neighbour contributes more flux than the target (TIC contamination ratio >= 1)
   RADIUS   (relabel, not reject) a planet whose radius, corrected for dilution, exceeds 2 R_J
   ODDEVEN, SECOND  (not for eclipsing binaries) repeats of the stored odd/even and secondary statistics against the vetting thresholds
@@ -45,10 +47,25 @@ def _num(pat, text):
     return float(m.group(1)) if m else None
 
 
-def reject(row, events, star, siblings=0):
-    """row: dict(tic, kind, period, t0, dur_h, snr, n_events, sectors, objtype, notes). events: [(sector, t0, depth_ppm, flags)].
-    star: dict(contratio) or {}. siblings: number of other ready stars on the same ephemeris."""
+def sync_twins(con, tic, p, t0):
+    """Other candidates, imaged in a sector shared with this star, with the same period and epoch: the same-sector rule
+    of planets.vet (0.3 per cent in period, 0.3 d in epoch), repeated for candidates vetted before that rule."""
     out = []
+    for o, q, u in con.execute('SELECT c.tic, c.period, c.t0 FROM candidate c WHERE c.tic != ? AND c.period > 0 AND EXISTS ('
+                               'SELECT 1 FROM star_sector a JOIN star_sector b ON a.sector = b.sector '
+                               'WHERE a.tic = ? AND b.tic = c.tic)', (tic, tic)):
+        if u is not None and abs(q / p - 1) < 0.003 and abs((((u - t0) / p + 0.5) % 1 - 0.5) * p) < 0.3:
+            out.append(o)
+    return out
+
+
+def reject(row, events, star, siblings=0, twins=()):
+    """row: dict(tic, kind, period, t0, dur_h, snr, n_events, sectors, objtype, notes). events: [(sector, t0, depth_ppm, flags)].
+    star: dict(contratio) or {}. siblings: number of other ready stars on the same ephemeris. twins: candidates from
+    sync_twins()."""
+    out = []
+    if twins:
+        out.append(('SYNC', f'same period and epoch as {len(twins)} star(s) imaged in a shared sector, e.g. TIC {twins[0]}'))
     p, notes, label = row['period'], row.get('notes') or '', row.get('objtype')
     ev = matched(events, p, row['t0'], row['dur_h'])
     secs = {int(x) for x in str(row.get('sectors') or '').split(',') if x.strip().isdigit()} or {s for s, _, _ in ev}
@@ -144,30 +161,33 @@ def main(argv=None):
         lock.write_text(str(os.getpid()))
     con = sqlite3.connect(paths.HOME / 'data' / 'hunt.db')
     try:
-        cols = 'tic kind period t0 dur_h snr n_events sectors objtype notes'.split()
-        rows = [dict(zip(cols, r)) for r in con.execute(f"SELECT {','.join(cols)} FROM candidate WHERE status='ready'")]
+        cols = 'tic kind period t0 dur_h snr n_events sectors objtype notes status'.split()
+        rows = [dict(zip(cols, r)) for r in con.execute(f"SELECT {','.join(cols)} FROM candidate "
+                                                        f"WHERE status IN ('ready', 'reviewed', 'review_user')")]
         with open(a.matches, encoding='utf8') as f:
             m = list(csv.DictReader(f))
         for r in m:
             r['tic'] = int(r['tic'])
             r['sep'] = float(r['sep']) if r['sep'] else None
-        found = {t: v for t, v in recovered.decide(m).items() if v['verdict'] == 'recovered'}
+        # a star already in a planet or eclipsing-binary catalogue is not a new discovery, whatever period the catalogue gives
+        found = {t: v for t, v in recovered.decide(m).items() if v['verdict'] in ('recovered', 'known_star', 'known_eb_star')}
         sib = siblings_of([r for r in rows if r['tic'] not in found])
         now = time.strftime('%Y-%m-%d %H:%M')
         n = collections.Counter()
         for r in rows:
             note = ''
-            status = 'ready'
+            status = r['status']
             if r['tic'] in found:
                 x = found[r['tic']]['match']
                 status = 'recovered'
-                note = f"recovered: {x['cat']} {x['cat_name']} ({x['ref']}), catalogue period {x['cat_period']}, relation {x['relation']}"
-                n['recovered'] += 1
+                note = (f"{found[r['tic']]['verdict']}: {x['cat']} {x['cat_name']} ({x['ref']}), catalogue period "
+                        f"{x['cat_period']}, relation {x['relation']}")
+                n[found[r['tic']]['verdict']] += 1
             else:
                 ev = con.execute('SELECT sector, t0, depth_ppm, flags FROM event WHERE tic=?', (r['tic'],)).fetchall()
                 st = con.execute('SELECT contratio FROM tic WHERE tic=?', (r['tic'],)).fetchone()
                 st = {'contratio': st[0]} if st else {}
-                why = reject(r, ev, st, sib[r['tic']])
+                why = reject(r, ev, st, sib[r['tic']], sync_twins(con, r['tic'], r['period'], r['t0']))
                 if why:
                     status = 'rejected'
                     note = 'screen ' + '; '.join(f'{c}: {d}' for c, d in why)

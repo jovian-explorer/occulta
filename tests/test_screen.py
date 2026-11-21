@@ -57,6 +57,18 @@ def test_cross_star_and_blend():
     assert 'BLEND' not in codes(row(), events(), {'contratio': 0.2})
 
 
+def test_sync_twin_in_shared_sector(tmp_path):
+    from occulta import survey
+    con = survey.db(tmp_path / 'hunt.db')
+    for t, p, t0 in ((1, 5.0, 100.0), (2, 5.01, 100.1), (3, 5.0, 100.0), (4, 5.0, 102.0)):
+        con.execute("INSERT INTO candidate(tic, kind, period, t0, status) VALUES (?, 'bls', ?, ?, 'new')", (t, p, t0))
+    for t, s in ((1, 10), (2, 10), (3, 11), (4, 10)):
+        con.execute('INSERT INTO star_sector(tic, sector, cam, ccd) VALUES (?, ?, 1, 1)', (t, s))
+    assert screen.sync_twins(con, 1, 5.0, 100.0) == [2]      # 3: no shared sector; 4: another epoch
+    assert 'SYNC' in codes(row(), events(), sib=0) | {c for c, _ in screen.reject(row(), events(), {}, 0, [2])}
+    assert 'SYNC' not in codes(row(), events())
+
+
 def test_stored_statistics_repeated():
     assert 'ODDEVEN' in codes(row(notes='odd/even 4.2 sigma'), events())
     assert 'ODDEVEN' not in codes(row(objtype='eclipsing binary', notes='odd/even 4.2 sigma'), events())
@@ -81,3 +93,15 @@ def test_period_relation_and_phase():
     assert recovered.period_relation(10.0, 5.0) == '2P'
     assert recovered.period_relation(5.0, 10.0) == 'P/2'
     assert not recovered.period_relation(5.0, 7.0)
+    assert recovered.period_relation(28.68, 9.56) == '3P'
+
+
+def test_single_transit_entry_recovered_by_epoch():
+    """A CTOI with no period is the candidate when its transit time lies on the candidate ephemeris within half the
+    transit duration; 2 h off a 3 h transit it is not."""
+    c = {'tic': 7, 'name': 'TIC 7', 'ra': None, 'dec': None, 'period': 25.0, 't0': 100.0, 'dur_h': 3.0}
+    on = {'cat': 'ExoFOP CTOI', 'kind': 'planet candidate', 'id': 7, 'period': None, 't0': 175.0 + 1 / 24,
+          'name': 'CTOI 7.01', 'cls': 'CTOI', 'ref': '', 'bib': ''}
+    assert recovered.decide(recovered.match([c], [on]))[7]['verdict'] == 'recovered'
+    off = dict(on, t0=175.0 + 2 / 24)
+    assert recovered.decide(recovered.match([c], [off]))[7]['verdict'] == 'known_star'

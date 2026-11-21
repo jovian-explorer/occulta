@@ -28,7 +28,7 @@ import numpy as np
 
 REL_TOL = 0.015            # fractional period agreement
 MATCH_ARCSEC = 10.0        # within this separation the catalogue star is the candidate star (3 TESS pixels would blend)
-RELATIONS = (('P', 1.0), ('2P', 2.0), ('P/2', 0.5))
+RELATIONS = (('P', 1.0), ('2P', 2.0), ('P/2', 0.5), ('3P', 3.0), ('P/3', 1 / 3))
 EB_VSX = ('E', 'EA', 'EB', 'EW', 'EC', 'ED', 'ELL', 'GS', 'AR', 'D', 'DM', 'DS', 'DW', 'K', 'KE', 'KW', 'SD', 'DC', 'PN')
 EB_SIMBAD = ('EB*', 'Al*', 'bL*', 'WU*', 'EP*', 'EB?', 'Al?', 'SB*', 'SB?')
 
@@ -62,6 +62,17 @@ def phase_consistent(t0_a, p_a, t0_b, p_b, rel, dur_d=0.2):
     p = min(p_a, p_b)
     d = (t0_a - t0_b + 0.5 * p) % p - 0.5 * p
     return bool(abs(d) < max(dur_d, 0.02 * p))
+
+
+def on_ephemeris(c, t0):
+    """Whether a catalogue transit time t0 (BTJD) falls on the candidate ephemeris within half the candidate's transit
+    duration, so that it is one of the candidate's own transits."""
+    try:
+        p, tc, half = float(c['period']), float(c['t0']), float(c['dur_h']) / 48
+        t0 = float(t0)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return p > 0 and abs(((t0 - tc) / p + 0.5) % 1 - 0.5) * p <= half
 
 
 def _num(x):
@@ -217,11 +228,13 @@ def match(cands, entries, arcsec=MATCH_ARCSEC):
                     hits[id(e)] = (e, 'coord', float(sep[i]))
         for e, how, sep in hits.values():
             rel = period_relation(c['period'], e['period'])
+            if not rel and not e['period'] and on_ephemeris(c, e.get('t0')):     # ExoFOP writes 0 for no period
+                rel = 'epoch'       # a single-transit catalogue entry (no period) whose transit our ephemeris predicts
             rows.append({'tic': c['tic'], 'cat': e['cat'], 'kind': e['kind'], 'how': how, 'sep': sep,
                          'cat_name': e['name'], 'cat_period': e['period'], 'cat_class': e['cls'], 'ref': e['ref'],
                          'bib': e['bib'], 'relation': rel,
-                         'phase_ok': phase_consistent(c.get('t0'), c['period'], e.get('t0'), e['period'] or 0, rel)
-                         if rel else None})
+                         'phase_ok': True if rel == 'epoch' else
+                         phase_consistent(c.get('t0'), c['period'], e.get('t0'), e['period'] or 0, rel) if rel else None})
     return rows
 
 
@@ -265,16 +278,16 @@ def main(argv=None):
     from . import sources
     con = sqlite3.connect(paths.HOME / 'data' / 'hunt.db')
     cands = []
-    for tic, kind, p, t0, ot in con.execute("SELECT tic, kind, period, t0, objtype FROM candidate WHERE status='ready'"):
+    for tic, kind, p, t0, dur, ot in con.execute("SELECT tic, kind, period, t0, dur_h, objtype FROM candidate WHERE status IN ('ready', 'reviewed', 'review_user')"):
         m = sources.mission_of(tic)
         pos = con.execute('SELECT ra, dec FROM tic WHERE tic=?' if m == 'TESS' else 'SELECT ra, dec FROM star WHERE sid=?',
                           (tic,)).fetchone()
         cands.append({'tic': tic, 'name': sources.name_of(tic), 'ra': pos[0] if pos else None,
-                      'dec': pos[1] if pos else None, 'period': p, 't0': t0, 'objtype': ot})
+                      'dec': pos[1] if pos else None, 'period': p, 't0': t0, 'dur_h': dur, 'objtype': ot})
     entries = load(a.catalogues)
-    for tic, src, per in con.execute('SELECT tic, src, period FROM known'):        # the survey's own copy of the lists
+    for tic, src, per, ep in con.execute('SELECT tic, src, period, epoch FROM known'):   # the survey's own copy of the lists
         entries.append({'cat': 'survey known table', 'kind': 'planet candidate', 'id': tic, 'ra': None, 'dec': None,
-                        'period': per, 't0': None, 'cls': src, 'ref': 'ExoFOP/NASA lists at survey time',
+                        'period': per or None, 't0': ep - 2457000 if ep and ep > 2e6 else ep, 'cls': src, 'ref': 'ExoFOP/NASA lists at survey time',
                         'bib': '', 'name': src})
     rows = match(cands, entries)
     with open(a.out, 'w', newline='', encoding='utf8') as f:
