@@ -4,7 +4,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23634486.svg)](https://doi.org/10.5281/zenodo.23634486)
 
-> **occulta is public** (pre-release 0.0.1). It is ready for use and for testing; results can still change between versions. Please report problems, wrong results and suggestions on the [issue tracker](https://github.com/jovian-explorer/occulta/issues/new/choose). To cite occulta, use the DOI [10.5281/zenodo.23634486](https://doi.org/10.5281/zenodo.23634486) (all versions; see [CITATION.cff](CITATION.cff)).
+> **occulta is public** (pre-release 0.0.2). It is ready for use and for testing; results can still change between versions. Please report problems, wrong results and suggestions on the [issue tracker](https://github.com/jovian-explorer/occulta/issues/new/choose). To cite occulta, use the DOI [10.5281/zenodo.23634486](https://doi.org/10.5281/zenodo.23634486) (all versions; see [CITATION.cff](CITATION.cff)).
 
 occulta, Latin for hidden things, is a search of the photometry of the Transiting Exoplanet Survey Satellite (TESS), K2, and Kepler for transiting planets and eclipsing binaries that no published catalogue contains. Space photometry records such objects whether or not anyone looks for them, so that the archives still contain signals that the catalogues built from the same data have not listed, in particular single transits from different years, long periods, and eclipses diluted by neighbouring stars. Since a signal is new only when it is absent from every catalogue, when its period is the true one, and when it belongs to the star it is attributed to, every step that decides whether a detection is real is part of the code, documented in [METHODS.md](METHODS.md), and repeatable from public data with a single command.
 
@@ -139,6 +139,7 @@ Dates are in UTC and are taken from the git history, the GitHub releases and the
 | Late 2023 | Development began, about three years before the code was put on GitHub. |
 | 25 October 2026 | GitHub repository created as a public repository. |
 | 25 October 2026 | Version 0.0.1, the first public pre-release ([10.5281/zenodo.23634487](https://doi.org/10.5281/zenodo.23634487)). |
+| 21 November 2026 | Version 0.0.2, pre-release with the catalogue cross-match (`occulta recovered`) and the final false-detection screen (`occulta screen`) used for the candidates of the AISR paper. |
 
 occulta is still under development and is in its final stages before a full release.
 
