@@ -139,7 +139,7 @@ Dates are in UTC and are taken from the git history, the GitHub releases and the
 | Late 2023 | Development began, about three years before the code was put on GitHub. |
 | 25 October 2026 | GitHub repository created as a public repository. |
 | 25 October 2026 | Version 0.0.1, the first public pre-release ([10.5281/zenodo.23634487](https://doi.org/10.5281/zenodo.23634487)). |
-| 21 November 2026 | Version 0.0.2, pre-release with the catalogue cross-match (`occulta recovered`) and the final false-detection screen (`occulta screen`) used for the candidates of the AISR paper. |
+| 21 November 2026 | Version 0.0.2, pre-release with the catalogue cross-match (`occulta recovered`) and the final false-detection screen (`occulta screen`) used for the candidates of the AISR paper ([10.5281/zenodo.24424318](https://doi.org/10.5281/zenodo.24424318)). |
 
 occulta is still under development and is in its final stages before a full release.
 
